@@ -31,7 +31,19 @@ android {
         }
     }
 
+    signingConfigs {
+        create("prorootDebug") {
+            storeFile = file("../debug/proroot-debug.keystore")
+            storePassword = "android"
+            keyAlias = "prorootdebug"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("prorootDebug")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
