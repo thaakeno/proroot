@@ -14,6 +14,13 @@ void main() {
         'speedBytesPerSecond': 64,
         'elapsedSeconds': 12,
         'etaSeconds': 34,
+        'stageProgress': 0.5,
+        'stageDetail': 'Downloading file 2 of 4',
+        'stageDownloadedBytes': 500,
+        'stageTotalBytes': 1000,
+        'stageSpeedBytesPerSecond': 100,
+        'completedItems': 2,
+        'totalItems': 4,
         'installed': true,
         'running': true,
         'detail': 'ok',
@@ -27,6 +34,13 @@ void main() {
       expect(snapshot.speedBytesPerSecond, 64);
       expect(snapshot.elapsedSeconds, 12);
       expect(snapshot.etaSeconds, 34);
+      expect(snapshot.stageProgress, 0.5);
+      expect(snapshot.stageDetail, 'Downloading file 2 of 4');
+      expect(snapshot.stageDownloadedBytes, 500);
+      expect(snapshot.stageTotalBytes, 1000);
+      expect(snapshot.stageSpeedBytesPerSecond, 100);
+      expect(snapshot.completedItems, 2);
+      expect(snapshot.totalItems, 4);
       expect(snapshot.installed, isTrue);
       expect(snapshot.running, isTrue);
       expect(snapshot.detail, 'ok');
@@ -58,6 +72,13 @@ void main() {
         speedBytesPerSecond: 0,
         elapsedSeconds: 5,
         etaSeconds: 10,
+        stageProgress: 0.25,
+        stageDetail: 'Resolving packages',
+        stageDownloadedBytes: 25,
+        stageTotalBytes: 100,
+        stageSpeedBytesPerSecond: 5,
+        completedItems: 1,
+        totalItems: 4,
         installed: true,
         running: false,
         detail: 'stable',
@@ -74,6 +95,13 @@ void main() {
       expect(changed.running, isFalse);
       expect(changed.elapsedSeconds, 5);
       expect(changed.etaSeconds, 10);
+      expect(changed.stageProgress, 0.25);
+      expect(changed.stageDetail, 'Resolving packages');
+      expect(changed.stageDownloadedBytes, 25);
+      expect(changed.stageTotalBytes, 100);
+      expect(changed.stageSpeedBytesPerSecond, 5);
+      expect(changed.completedItems, 1);
+      expect(changed.totalItems, 4);
       expect(changed.detail, 'stable');
     });
   });
