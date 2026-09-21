@@ -12,12 +12,18 @@ class SystemServicesSession(
 
     @Synchronized
     fun start() {
-        if (process?.isAlive == true && systemBusSocket().exists() && upowerReady().exists() && login1Ready().exists()) return
+        if (process?.isAlive == true &&
+            systemBusSocket().exists() &&
+            upowerReady().exists() &&
+            login1Ready().exists() &&
+            activationReady().exists()
+        ) return
 
         stop()
         systemBusSocket().delete()
         upowerReady().delete()
         login1Ready().delete()
+        activationReady().delete()
 
         val started = runner.startRootService(
             "exec /usr/local/lib/proroot/start-system-services.sh",
@@ -37,7 +43,13 @@ class SystemServicesSession(
 
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
         while (System.nanoTime() < deadline) {
-            if (systemBusSocket().exists() && upowerReady().exists() && login1Ready().exists() && started.isAlive) return
+            if (
+                systemBusSocket().exists() &&
+                upowerReady().exists() &&
+                login1Ready().exists() &&
+                activationReady().exists() &&
+                started.isAlive
+            ) return
             if (!started.isAlive) break
             Thread.sleep(50)
         }
@@ -59,14 +71,23 @@ class SystemServicesSession(
         systemBusSocket().delete()
         upowerReady().delete()
         login1Ready().delete()
+        activationReady().delete()
         File(paths.rootfs, "run/dbus/pid").delete()
     }
 
-    fun isRunning(): Boolean = process?.isAlive == true && systemBusSocket().exists() && upowerReady().exists() && login1Ready().exists()
+    fun isRunning(): Boolean =
+        process?.isAlive == true &&
+            systemBusSocket().exists() &&
+            upowerReady().exists() &&
+            login1Ready().exists() &&
+            activationReady().exists()
 
     private fun upowerReady(): File = File(paths.rootfs, "run/proroot-upower.ready")
 
     private fun login1Ready(): File = File(paths.rootfs, "run/proroot-login1.ready")
+
+    private fun activationReady(): File =
+        File(paths.rootfs, "run/proroot-system-activation.ready")
 
     private fun systemBusSocket(): File =
         File(paths.rootfs, "run/dbus/system_bus_socket")
