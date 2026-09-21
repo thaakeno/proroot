@@ -28,7 +28,7 @@ unset FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS
 mkdir -p     "$runtime"     /tmp/.X11-unix     "$XDG_CONFIG_HOME"     "$XDG_CACHE_HOME"     "$XDG_DATA_HOME"     "$XDG_STATE_HOME"
 chmod 0700 "$runtime"
 chmod 1777 /tmp /tmp/.X11-unix
-rm -f "$runtime"/wayland-* "$runtime"/proroot-session.env
+rm -f     "$runtime"/wayland-*     "$runtime"/xauth_*     "$runtime"/proroot-session.env     /tmp/.X11-unix/X*     /tmp/.X*-lock
 
 export XDG_RUNTIME_DIR="$runtime"
 export XDG_CURRENT_DESKTOP=KDE
