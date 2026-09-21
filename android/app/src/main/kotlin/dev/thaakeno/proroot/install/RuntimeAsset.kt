@@ -8,7 +8,6 @@ enum class RuntimeAssetKind {
     ANLAND_GUEST,
     KWIN_PACKAGES,
     XWAYLAND_PACKAGE,
-    BRAVE,
 }
 
 data class RuntimeAsset(
