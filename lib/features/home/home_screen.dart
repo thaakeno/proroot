@@ -191,9 +191,10 @@ class _AppGrid extends StatelessWidget {
           child: InkWell(
             onTap: controller.snapshot.installed
                 ? () async {
+                    onOpenDesktop();
+                    await Future<void>.delayed(const Duration(milliseconds: 120));
                     try {
                       await controller.launchApp(item.$3);
-                      onOpenDesktop();
                     } catch (error) {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
