@@ -26,13 +26,14 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val mutex = Mutex()
     private val paths = RuntimePaths(context).also { it.ensureHostDirectories() }
     private val runner = ProrootRunner(context, paths)
+    private val installRunner = InstallProotRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
     private val systemServices = SystemServicesSession(runner, paths)
     private val session = DesktopSession(runner, paths)
     private val installer = RuntimeInstaller(
         context = context,
         paths = paths,
-        runner = runner,
+        installRunner = installRunner,
     )
     private val appCatalog = DesktopAppCatalog(paths)
     private val appLauncher = DesktopAppLauncher(runner, paths)
