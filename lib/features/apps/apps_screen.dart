@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+
 import '../../core/models/linux_app.dart';
 import '../../core/state/runtime_controller.dart';
 
@@ -18,6 +22,8 @@ class AppsScreen extends StatefulWidget {
 
 class _AppsScreenState extends State<AppsScreen> {
   late Future<List<LinuxApp>> _apps;
+  final _searchController = TextEditingController();
+  String _query = '';
 
   @override
   void initState() {
@@ -25,11 +31,30 @@ class _AppsScreenState extends State<AppsScreen> {
     _apps = widget.controller.desktopApps();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   void _refresh() {
     setState(() => _apps = widget.controller.desktopApps());
   }
 
-  IconData _iconFor(LinuxApp app) {
+  List<LinuxApp> _filter(List<LinuxApp> apps) {
+    final query = _query.trim().toLowerCase();
+    if (query.isEmpty) return apps;
+    return apps.where((app) {
+      final haystack = <String>[
+        app.name,
+        app.genericName ?? '',
+        app.categories.join(' '),
+      ].join(' ').toLowerCase();
+      return haystack.contains(query);
+    }).toList(growable: false);
+  }
+
+  IconData _fallbackIcon(LinuxApp app) {
     final text = '${app.name} ${app.icon ?? ''} ${app.categories.join(' ')}'.toLowerCase();
     if (text.contains('browser') || text.contains('firefox') || text.contains('brave')) {
       return Icons.language_rounded;
@@ -70,6 +95,28 @@ class _AppsScreenState extends State<AppsScreen> {
             ),
           ],
         ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          sliver: SliverToBoxAdapter(
+            child: SearchBar(
+              controller: _searchController,
+              leading: const Icon(Icons.search_rounded),
+              hintText: 'Search Linux apps',
+              onChanged: (value) => setState(() => _query = value),
+              trailing: [
+                if (_query.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Clear search',
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() => _query = '');
+                    },
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+              ],
+            ),
+          ),
+        ),
         FutureBuilder<List<LinuxApp>>(
           future: _apps,
           builder: (context, snapshot) {
@@ -80,8 +127,21 @@ class _AppsScreenState extends State<AppsScreen> {
               );
             }
 
-            final apps = snapshot.data ?? const [];
-            if (apps.isEmpty) {
+            if (snapshot.hasError) {
+              return SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Text('Could not load applications: ${snapshot.error}'),
+                  ),
+                ),
+              );
+            }
+
+            final allApps = snapshot.data ?? const <LinuxApp>[];
+            final apps = _filter(allApps);
+            if (allApps.isEmpty) {
               return SliverFillRemaining(
                 hasScrollBody: false,
                 child: Center(
@@ -105,13 +165,20 @@ class _AppsScreenState extends State<AppsScreen> {
               );
             }
 
+            if (apps.isEmpty) {
+              return const SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: Text('No apps match this search.')),
+              );
+            }
+
             return SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 120),
               sliver: SliverGrid.builder(
                 itemCount: apps.length,
                 gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: 220,
-                  mainAxisExtent: 126,
+                  mainAxisExtent: 148,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
                 ),
@@ -126,7 +193,7 @@ class _AppsScreenState extends State<AppsScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(_iconFor(app), size: 30),
+                            _LinuxAppIcon(app: app, fallback: _fallbackIcon(app)),
                             const Spacer(),
                             Text(
                               app.name,
@@ -152,6 +219,51 @@ class _AppsScreenState extends State<AppsScreen> {
           },
         ),
       ],
+    );
+  }
+}
+
+class _LinuxAppIcon extends StatelessWidget {
+  const _LinuxAppIcon({required this.app, required this.fallback});
+
+  final LinuxApp app;
+  final IconData fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    final path = app.iconPath;
+    final fallbackWidget = Icon(fallback, size: 30);
+
+    return Container(
+      width: 50,
+      height: 50,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: path == null ? fallbackWidget : _iconFile(path, fallbackWidget),
+    );
+  }
+
+  Widget _iconFile(String path, Widget fallback) {
+    final file = File(path);
+    if (!file.existsSync()) return fallback;
+
+    if (path.toLowerCase().endsWith('.svg')) {
+      return SvgPicture.file(
+        file,
+        fit: BoxFit.contain,
+        placeholderBuilder: (_) => fallback,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    }
+
+    return Image.file(
+      file,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) => fallback,
     );
   }
 }
