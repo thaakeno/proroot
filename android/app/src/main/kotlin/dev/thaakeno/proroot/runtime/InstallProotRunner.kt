@@ -118,7 +118,11 @@ class InstallProotRunner(
         procCompat.refresh()
         prepareDependencies()
 
-        val l2s = File(rootfs, ".l2s").apply { mkdirs() }
+        // Keep the old global .l2s directory reachable for rootfses created by
+        // earlier builds, but do not point PROOT_L2S_DIR at it anymore. New
+        // link2symlink intermediates stay beside their files, so unrelated
+        // packages no longer share one global basename namespace.
+        val legacyL2s = File(rootfs, ".l2s").apply { mkdirs() }
         val args = mutableListOf(
             launcher.absolutePath,
             "--link2symlink",
@@ -130,7 +134,7 @@ class InstallProotRunner(
         args += listOf(
             "--rootfs=${rootfs.absolutePath}",
             "--cwd=$workingDirectory",
-            "-b", "${l2s.absolutePath}:${l2s.absolutePath}",
+            "-b", "${legacyL2s.absolutePath}:${legacyL2s.absolutePath}",
         )
 
         addBind(args, "/dev", "/dev")
@@ -165,7 +169,7 @@ class InstallProotRunner(
             .redirectErrorStream(true)
             .apply {
                 environment().clear()
-                environment().putAll(guestEnvironment(fakeRoot, l2s))
+                environment().putAll(guestEnvironment(fakeRoot))
             }
     }
 
@@ -198,7 +202,6 @@ class InstallProotRunner(
 
     private fun guestEnvironment(
         fakeRoot: Boolean,
-        l2s: File,
     ): MutableMap<String, String> {
         val user = if (fakeRoot) "root" else "linux"
         val home = if (fakeRoot) "/root" else "/home/linux"
@@ -213,7 +216,6 @@ class InstallProotRunner(
             "TMPDIR" to "/tmp",
             "DEBIAN_FRONTEND" to "noninteractive",
             "PROOT_TMP_DIR" to paths.tmpDir.absolutePath,
-            "PROOT_L2S_DIR" to l2s.absolutePath,
             "PROOT_LOADER" to loader.absolutePath,
             "PROOT_LOADER_32" to loader32.absolutePath,
             "LD_LIBRARY_PATH" to
