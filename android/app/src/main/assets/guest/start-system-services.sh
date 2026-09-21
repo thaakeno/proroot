@@ -2,7 +2,12 @@
 set -euo pipefail
 
 mkdir -p /run/dbus /run/lock
-rm -f     /run/dbus/system_bus_socket     /run/dbus/pid     /run/proroot-upower.ready     /run/proroot-login1.ready
+rm -f \
+    /run/dbus/system_bus_socket \
+    /run/dbus/pid \
+    /run/proroot-upower.ready \
+    /run/proroot-login1.ready \
+    /run/proroot-system-activation.ready
 
 dbus_pid=""
 upower_pid=""
@@ -18,7 +23,12 @@ cleanup() {
     if [[ -n "$dbus_pid" ]]; then
         kill "$dbus_pid" >/dev/null 2>&1 || true
     fi
-    rm -f         /run/proroot-upower.ready         /run/proroot-login1.ready         /run/dbus/system_bus_socket         /run/dbus/pid
+    rm -f \
+        /run/proroot-upower.ready \
+        /run/proroot-login1.ready \
+        /run/proroot-system-activation.ready \
+        /run/dbus/system_bus_socket \
+        /run/dbus/pid
 }
 trap cleanup EXIT INT TERM
 
@@ -49,5 +59,17 @@ wait_for_file /run/proroot-upower.ready "$upower_pid"
 /usr/local/lib/proroot/host-login1-bridge.py &
 login1_pid=$!
 wait_for_file /run/proroot-login1.ready "$login1_pid"
+
+activatable="$(
+    dbus-send \
+        --system \
+        --print-reply=literal \
+        --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus \
+        org.freedesktop.DBus.ListActivatableNames
+)"
+grep -q 'org.freedesktop.PolicyKit1' <<<"$activatable"
+grep -q 'org.freedesktop.PackageKit' <<<"$activatable"
+printf '%s\n' "$$" >/run/proroot-system-activation.ready
 
 wait "$dbus_pid"
