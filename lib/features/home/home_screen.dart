@@ -192,7 +192,6 @@ class _AppGrid extends StatelessWidget {
             onTap: controller.snapshot.installed
                 ? () async {
                     onOpenDesktop();
-                    await Future<void>.delayed(const Duration(milliseconds: 120));
                     try {
                       await controller.launchApp(item.$3);
                     } catch (error) {
