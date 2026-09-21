@@ -31,6 +31,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val session = DesktopSession(runner, paths)
     private val installer = RuntimeInstaller(context, paths, runner)
     private val appCatalog = DesktopAppCatalog(paths)
+    private val appLauncher = DesktopAppLauncher(runner, paths)
 
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
@@ -64,6 +65,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                             installed = true,
                         ),
                     )
+                    stopForegroundHost()
                 } catch (t: Throwable) {
                     RuntimeEvents.publish(
                         RuntimeStatus(
@@ -73,6 +75,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                             installed = paths.installMarker.isFile,
                         ),
                     )
+                    stopForegroundHost()
                 }
             }
         }
@@ -149,15 +152,23 @@ class RuntimeEngine private constructor(private val context: Context) {
                 )
             }
         session.start(refreshRate, scale) { exitCode ->
-            if (RuntimeEvents.latest.phase != RuntimePhase.stopping) {
-                RuntimeEvents.publish(
-                    RuntimeStatus(
-                        phase = RuntimePhase.failed,
-                        message = "Linux desktop stopped",
-                        detail = "Desktop process exited with code $exitCode. See diagnostics for full logs.",
-                        installed = true,
-                    ),
-                )
+            if (RuntimeEvents.latest.phase == RuntimePhase.running) {
+                scope.launch {
+                    mutex.withLock {
+                        if (RuntimeEvents.latest.phase != RuntimePhase.running) return@withLock
+                        systemServices.stop()
+                        daemon.stop()
+                        RuntimeEvents.publish(
+                            RuntimeStatus(
+                                phase = RuntimePhase.failed,
+                                message = "Linux desktop stopped",
+                                detail = "Desktop process exited with code $exitCode. See diagnostics for full logs.",
+                                installed = true,
+                            ),
+                        )
+                        stopForegroundHost()
+                    }
+                }
             }
         }
     }
@@ -190,6 +201,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 installed = paths.installMarker.isFile,
             ),
         )
+        stopForegroundHost()
     }
 
     fun stop() {
@@ -243,21 +255,8 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun desktopApps(): List<Map<String, Any?>> = appCatalog.list().map(DesktopApp::asMap)
 
     fun launchDesktopApp(desktopId: String) {
-        require(desktopId.matches(Regex("[A-Za-z0-9._+-]+"))) { "Invalid desktop id" }
         check(session.isRunning()) { "Linux desktop is not running" }
-        scope.launch {
-            val appId = desktopId.removeSuffix(".desktop")
-            val result = runner.exec(
-                command = "/usr/local/lib/proroot/launch-desktop-app.sh '$appId'",
-                timeoutSeconds = 30,
-                fakeRoot = false,
-            )
-            if (!result.successful) {
-                File(paths.logsDir, "app-launch.log").appendText(
-                    "[$desktopId] exit=${result.exitCode}\n${result.output}\n",
-                )
-            }
-        }
+        appLauncher.launch(desktopId)
     }
 
     fun setDisplayOptions(refresh: Int, scale: Double) {
