@@ -344,7 +344,10252 @@ class RuntimeInstaller(
             command = """
                 set -e
                 missing=''
-                for package in $packages; do
+                for package in ${'
+                    if ! dpkg -s "${' >/dev/null 2>&1; then
+                        missing="${'
+                    fi
+                done
+
+                if [ -n "${'; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends ${'
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing ${'
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing ${'
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing ${'
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}missing ${'
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
+
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
+        } else {
+            error("Previous rootfs has no verified runtime marker")
+        }
+        return true
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
+                name.startsWith("check-") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
+        }
+    }
+
+    private fun stagePackage(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+
+    private fun activate(staging: File) {
+        check(staging.isDirectory) { "Staging rootfs disappeared" }
+
+        paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
+        if (paths.rootfs.exists()) {
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
+        }
+
+        try {
+            check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+        } catch (t: Throwable) {
+            paths.rootfs.deleteRecursively()
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+            throw t
+        }
+    }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
+        etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
+        etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
+    )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsSha256: String,
+        allowLegacyFailedStaging: Boolean,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
+        }
+
+        return allowLegacyFailedStaging
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsSha256: String,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=$rootfsSha256\n",
+        )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
+
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+}
+}packages; do
                     if ! dpkg -s "$package" >/dev/null 2>&1; then
                         missing="$missing $package"
                     fi
