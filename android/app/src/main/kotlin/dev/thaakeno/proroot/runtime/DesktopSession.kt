@@ -16,7 +16,7 @@ class DesktopSession(
 
         val safeRefresh = refreshRate.coerceIn(60, 165)
         val safeScale = scale.coerceIn(0.75, 2.0)
-        val script = "exec /usr/local/lib/proroot/start-desktop.sh $safeRefresh $safeScale"
+        val script = "exec /usr/local/lib/proroot/start-desktop.sh $safeRefresh"
 
         val started = runner.startSession(script)
         process = started
@@ -45,6 +45,23 @@ class DesktopSession(
         }
 
         waitForDesktopReady(started)
+        if (safeScale != 1.0) {
+            val result = applyScale(safeScale)
+            if (!result.successful) {
+                File(paths.logsDir, "display-controls.log").appendText(
+                    "Initial scale $safeScale failed (exit ${result.exitCode}):\n${result.output}\n",
+                )
+            }
+        }
+    }
+
+    fun applyScale(scale: Double): CommandResult {
+        val safeScale = scale.coerceIn(0.75, 2.0)
+        return runner.exec(
+            command = "/usr/local/lib/proroot/set-desktop-scale.sh $safeScale",
+            timeoutSeconds = 15,
+            fakeRoot = false,
+        )
     }
 
     private fun waitForDesktopReady(started: Process) {
