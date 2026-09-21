@@ -1,5 +1,6 @@
 package dev.thaakeno.proroot.install
 
+import android.system.Os
 import dev.thaakeno.proroot.runtime.ProrootRunner
 import dev.thaakeno.proroot.runtime.RuntimePaths
 import dev.thaakeno.proroot.runtime.RuntimePhase
@@ -27,34 +28,25 @@ class RuntimeInstaller(
         check(staging.mkdirs()) { "Could not create staging rootfs" }
         extractor.extractTarXz(requireAsset(assets, RuntimeAssetKind.ROOTFS), staging)
 
-        onStatus(RuntimeStatus(RuntimePhase.extracting, 0.35, "Installing Adreno 840 graphics"))
-        extractor.extractTarGz(requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY), staging)
-
         packageDir.mkdirs()
-        stagePackage(
-            requireAsset(assets, RuntimeAssetKind.ANLAND_GUEST),
-            File(packageDir, "anland/anland.deb"),
-        )
-        stagePackage(
-            requireAsset(assets, RuntimeAssetKind.XWAYLAND_PACKAGE),
-            File(packageDir, "xwayland/xwayland.deb"),
-        )
-        extractor.extractZip(
-            requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES),
-            File(packageDir, "kwin"),
-        )
+        stagePackage(requireAsset(assets, RuntimeAssetKind.ANLAND_GUEST), File(packageDir, "anland/anland.deb"))
+        stagePackage(requireAsset(assets, RuntimeAssetKind.XWAYLAND_PACKAGE), File(packageDir, "xwayland/xwayland.deb"))
+        extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
-        onStatus(RuntimeStatus(RuntimePhase.extracting, 0.62, "Installing Brave"))
+        onStatus(RuntimeStatus(RuntimePhase.extracting, 0.40, "Installing Brave"))
         installBrave(staging, requireAsset(assets, RuntimeAssetKind.BRAVE))
 
-        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.70, "Installing KDE Plasma and applications"))
-        provisioner.provision(staging)
+        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.55, "Installing KDE Plasma and applications"))
+        provisioner.provisionBase(staging)
 
-        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.97, "Finalizing Linux environment"))
+        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.88, "Installing pinned Adreno 840 graphics"))
+        extractor.extractTarGz(requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY), staging)
+        provisioner.finalizeGraphicsAndVerify(staging)
+
+        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.98, "Activating verified Linux environment"))
         activate(staging)
-
         paths.installMarker.writeText(
-            "runtime=1\ndevice=${android.os.Build.DEVICE}\nabi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n",
+            "runtime=1\ndevice=${android.os.Build.DEVICE}\nabi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n"
         )
     }
 
@@ -67,27 +59,32 @@ class RuntimeInstaller(
             .firstOrNull { file -> file.isFile && (file.name == "brave" || file.name == "brave-browser") }
             ?: error("Brave archive does not contain the browser executable")
 
+        braveDir.walkTopDown()
+            .filter { file ->
+                file.isFile && file.name in setOf("brave", "brave-browser", "chrome-sandbox", "chrome_crashpad_handler")
+            }
+            .forEach { file -> runCatching { Os.chmod(file.absolutePath, 0x1ED) } }
+
         val link = File(rootfs, "usr/local/bin/brave-browser")
         link.parentFile?.mkdirs()
         link.delete()
         val guestBinary = binary.absolutePath.removePrefix(rootfs.absolutePath)
         Files.createSymbolicLink(link.toPath(), Path.of(guestBinary))
 
-        val desktop = File(rootfs, "usr/share/applications/brave-browser.desktop")
-        desktop.parentFile?.mkdirs()
-        desktop.writeText(
-            """
-            [Desktop Entry]
-            Type=Application
-            Name=Brave Browser
-            GenericName=Web Browser
-            Exec=/usr/local/bin/brave-browser %U
-            Terminal=false
-            Categories=Network;WebBrowser;
-            MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
-            StartupNotify=true
-            """.trimIndent() + "\n",
-        )
+        File(rootfs, "usr/share/applications/brave-browser.desktop").apply {
+            parentFile?.mkdirs()
+            writeText("""
+                [Desktop Entry]
+                Type=Application
+                Name=Brave Browser
+                GenericName=Web Browser
+                Exec=/usr/local/bin/brave-browser %U
+                Terminal=false
+                Categories=Network;WebBrowser;
+                MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+                StartupNotify=true
+            """.trimIndent() + "\n")
+        }
     }
 
     private fun stagePackage(source: File, target: File) {
@@ -98,13 +95,9 @@ class RuntimeInstaller(
     private fun activate(staging: File) {
         check(staging.isDirectory) { "Staging rootfs disappeared" }
         paths.rootfsPrevious.deleteRecursively()
-
         if (paths.rootfs.exists()) {
-            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
-                "Could not preserve previous rootfs"
-            }
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) { "Could not preserve previous rootfs" }
         }
-
         try {
             check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
             paths.rootfsPrevious.deleteRecursively()
@@ -115,8 +108,6 @@ class RuntimeInstaller(
         }
     }
 
-    private fun requireAsset(
-        assets: Map<RuntimeAssetKind, File>,
-        kind: RuntimeAssetKind,
-    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
+    private fun requireAsset(assets: Map<RuntimeAssetKind, File>, kind: RuntimeAssetKind): File =
+        assets[kind] ?: error("Missing runtime asset: $kind")
 }

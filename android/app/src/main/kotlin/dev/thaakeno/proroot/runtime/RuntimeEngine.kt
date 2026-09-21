@@ -28,7 +28,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val runner = ProrootRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
     private val session = DesktopSession(runner, paths)
-    private val installer = RuntimeInstaller(context, paths, runner)
+    private val installer = RuntimeInstaller(paths, runner)
 
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
@@ -54,7 +54,7 @@ class RuntimeEngine private constructor(private val context: Context) {
             mutex.withLock {
                 if (session.isRunning()) return@withLock
                 try {
-                    installer.install { status -> RuntimeEvents.publish(status) }
+                    installer.install(RuntimeEvents::publish)
                     RuntimeEvents.publish(
                         RuntimeStatus(
                             phase = RuntimePhase.ready,
@@ -82,12 +82,7 @@ class RuntimeEngine private constructor(private val context: Context) {
         scope.launch {
             mutex.withLock {
                 if (!paths.installMarker.isFile) {
-                    RuntimeEvents.publish(
-                        RuntimeStatus(
-                            phase = RuntimePhase.missing,
-                            message = "Install Linux first",
-                        ),
-                    )
+                    RuntimeEvents.publish(RuntimeStatus(phase = RuntimePhase.missing, message = "Install Linux first"))
                     return@withLock
                 }
                 if (session.isRunning()) return@withLock
@@ -95,7 +90,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = RuntimePhase.starting,
-                        message = "Starting native Wayland desktop",
+                        message = "Starting KDE Plasma",
                         installed = true,
                     ),
                 )
@@ -124,6 +119,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                         ),
                     )
                 } catch (t: Throwable) {
+                    session.stop()
                     daemon.stop()
                     RuntimeEvents.publish(
                         RuntimeStatus(
@@ -187,9 +183,16 @@ class RuntimeEngine private constructor(private val context: Context) {
             val appId = desktopId.removeSuffix(".desktop")
             runner.exec(
                 """
-                runuser -u linux -- env                   HOME=/home/linux                   XDG_RUNTIME_DIR=/run/user/1000                   XDG_CURRENT_DESKTOP=KDE                   XDG_SESSION_TYPE=wayland                   WAYLAND_DISPLAY=wayland-0                   bash -lc 'gtk-launch $appId >/dev/null 2>&1 &'
+                export HOME=/home/linux
+                export XDG_RUNTIME_DIR=/run/user/1000
+                session_env=/run/user/1000/proroot-session.env
+                test -r "$session_env" && . "$session_env"
+                socket="$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' 2>/dev/null | head -n1)"
+                test -n "$socket" || exit 72
+                export WAYLAND_DISPLAY="${socket##*/}"
+                exec runuser -u linux -- env                     HOME=/home/linux                     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR"                     DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"                     WAYLAND_DISPLAY="$WAYLAND_DISPLAY"                     XDG_CURRENT_DESKTOP=KDE                     XDG_SESSION_TYPE=wayland                     gtk-launch $appId
                 """.trimIndent(),
-                timeoutSeconds = 10,
+                timeoutSeconds = 30,
             )
         }
     }

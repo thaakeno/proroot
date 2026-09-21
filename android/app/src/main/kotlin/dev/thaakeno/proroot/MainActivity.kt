@@ -17,7 +17,7 @@ class MainActivity : FlutterActivity() {
 
         flutterEngine.platformViewsController.registry.registerViewFactory(
             LinuxDisplayFactory.VIEW_TYPE,
-            LinuxDisplayFactory(applicationContext),
+            LinuxDisplayFactory(),
         )
     }
 
