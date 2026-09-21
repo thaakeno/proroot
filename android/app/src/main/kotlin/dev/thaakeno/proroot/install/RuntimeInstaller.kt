@@ -30,6 +30,7 @@ class RuntimeInstaller(
     suspend fun install(onStatus: (RuntimeStatus) -> Unit) {
         paths.ensureHostDirectories()
         recoverInterruptedActivation()
+        val hadPreviousFailure = paths.lastInstallFailure.isFile
         journal.begin()
         val installStartedAtMs = System.currentTimeMillis()
 
@@ -71,7 +72,11 @@ class RuntimeInstaller(
         val packageDir = File(staging, "opt/proroot-packages")
 
         val rootfsAsset = requireAsset(assets, RuntimeAssetKind.ROOTFS)
-        val resumeStaging = canResumeStaging(staging, rootfsAsset)
+        val resumeStaging = canResumeStaging(
+            staging = staging,
+            rootfsAsset = rootfsAsset,
+            allowLegacyFailedStaging = hadPreviousFailure,
+        )
 
         if (resumeStaging) {
             emit(
@@ -353,6 +358,7 @@ class RuntimeInstaller(
     private fun canResumeStaging(
         staging: File,
         rootfsAsset: RuntimeAsset,
+        allowLegacyFailedStaging: Boolean,
     ): Boolean {
         if (!staging.isDirectory) return false
         if (!File(staging, "etc/debian_version").isFile) return false
@@ -366,7 +372,7 @@ class RuntimeInstaller(
 
         // Accept a valid staging tree from the immediately preceding failed build
         // so an app update can resume instead of throwing away hundreds of packages.
-        return paths.lastInstallFailure.isFile
+        return allowLegacyFailedStaging
     }
 
     private fun writeStagingMarker(
