@@ -54,5 +54,6 @@ export PROROOT_REFRESH_HZ="$refresh"
 export PIPEWIRE_RUNTIME_DIR="$runtime"
 export PULSE_RUNTIME_PATH="$runtime/anland-pulse"
 export PULSE_SERVER="unix:$PULSE_RUNTIME_PATH/native"
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 
 exec dbus-run-session -- /usr/local/lib/proroot/start-user-session.sh

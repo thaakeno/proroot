@@ -13,7 +13,7 @@ class DesktopProvisioner(
         runChecked(rootfs, """
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux \
-              dbus dbus-x11 dbus-user-session policykit-1 packagekit \
+              dbus dbus-x11 dbus-user-session policykit-1 packagekit upower \
               xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info \
               xdg-desktop-portal xdg-desktop-portal-kde \
               kde-plasma-desktop plasma-workspace plasma-discover systemsettings \

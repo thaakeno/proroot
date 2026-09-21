@@ -90,6 +90,16 @@ class ProrootRunner(
         )
     }
 
+    fun startRootService(shellCommand: String): Process =
+        command(
+            workingDirectory = "/root",
+            shellCommand = shellCommand,
+            fakeRoot = true,
+            extraEnvironment = mapOf(
+                "PROROOT_LOG_APPEND" to File(paths.logsDir, "proroot-system-services.log").absolutePath,
+            ),
+        ).start()
+
     fun startSession(shellCommand: String): Process =
         command(
             workingDirectory = "/home/linux",

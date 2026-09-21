@@ -27,6 +27,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val paths = RuntimePaths(context).also { it.ensureHostDirectories() }
     private val runner = ProrootRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
+    private val systemServices = SystemServicesSession(runner, paths)
     private val session = DesktopSession(runner, paths)
     private val installer = RuntimeInstaller(context, paths, runner)
     private val appCatalog = DesktopAppCatalog(paths)
@@ -103,6 +104,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 }
 
                 session.stop()
+                systemServices.stop()
                 daemon.stop()
 
                 if (installer.canRollback()) {
@@ -127,6 +129,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                     }
 
                     session.stop()
+                    systemServices.stop()
                     daemon.stop()
                     publishStartFailure(recoveryFailure, firstFailure)
                     return@withLock
@@ -140,6 +143,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private fun startDesktopOnce() {
         paths.resetTransientState()
         daemon.start()
+        systemServices.start()
         session.start(refreshRate, scale) { exitCode ->
             if (RuntimeEvents.latest.phase != RuntimePhase.stopping) {
                 RuntimeEvents.publish(
@@ -196,6 +200,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                     ),
                 )
                 session.stop()
+                systemServices.stop()
                 daemon.stop()
                 RuntimeEvents.publish(
                     RuntimeStatus(
@@ -212,6 +217,7 @@ class RuntimeEngine private constructor(private val context: Context) {
         scope.launch {
             mutex.withLock {
                 session.stop()
+                systemServices.stop()
                 daemon.stop()
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()

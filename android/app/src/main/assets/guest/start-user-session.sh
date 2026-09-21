@@ -79,6 +79,7 @@ fi
 env_file="$runtime/proroot-session.env"
 {
     printf 'export DBUS_SESSION_BUS_ADDRESS=%q\n' "$DBUS_SESSION_BUS_ADDRESS"
+    printf 'export DBUS_SYSTEM_BUS_ADDRESS=%q\n' "${DBUS_SYSTEM_BUS_ADDRESS:-unix:path=/run/dbus/system_bus_socket}"
     printf 'export XDG_RUNTIME_DIR=%q\n' "$XDG_RUNTIME_DIR"
     printf 'export PIPEWIRE_RUNTIME_DIR=%q\n' "$PIPEWIRE_RUNTIME_DIR"
     printf 'export PULSE_RUNTIME_PATH=%q\n' "$PULSE_RUNTIME_PATH"
