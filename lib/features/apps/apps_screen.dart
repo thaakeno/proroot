@@ -59,13 +59,27 @@ class _AppsScreenState extends State<AppsScreen> {
     if (text.contains('browser') || text.contains('firefox') || text.contains('brave')) {
       return Icons.language_rounded;
     }
-    if (text.contains('terminal') || text.contains('konsole')) return Icons.terminal_rounded;
-    if (text.contains('code') || text.contains('development')) return Icons.code_rounded;
-    if (text.contains('file') || text.contains('dolphin')) return Icons.folder_rounded;
-    if (text.contains('office') || text.contains('writer')) return Icons.description_rounded;
-    if (text.contains('video') || text.contains('vlc')) return Icons.play_circle_outline_rounded;
-    if (text.contains('graphics') || text.contains('gimp')) return Icons.brush_rounded;
-    if (text.contains('settings')) return Icons.tune_rounded;
+    if (text.contains('terminal') || text.contains('konsole')) {
+      return Icons.terminal_rounded;
+    }
+    if (text.contains('code') || text.contains('development')) {
+      return Icons.code_rounded;
+    }
+    if (text.contains('file') || text.contains('dolphin')) {
+      return Icons.folder_rounded;
+    }
+    if (text.contains('office') || text.contains('writer')) {
+      return Icons.description_rounded;
+    }
+    if (text.contains('video') || text.contains('vlc')) {
+      return Icons.play_circle_outline_rounded;
+    }
+    if (text.contains('graphics') || text.contains('gimp')) {
+      return Icons.brush_rounded;
+    }
+    if (text.contains('settings')) {
+      return Icons.tune_rounded;
+    }
     return Icons.apps_rounded;
   }
 
