@@ -8,6 +8,7 @@ class DesktopProvisioner(
     private val desktopUid: Int,
 ) {
     private val rootlessServices = RootlessDesktopServicesConfigurator()
+
     fun provisionBase(
         rootfs: File,
         onProgress: (ProvisioningStage) -> Unit = {},
@@ -42,8 +43,7 @@ class DesktopProvisioner(
             set -e
 
             if getent group linux >/dev/null 2>&1; then
-                current_gid="$(getent group linux | cut -d: -f3)"
-                if [ "$current_gid" != "$desktopUid" ]; then
+                if [ "$(getent group linux | cut -d: -f3)" != "$desktopUid" ]; then
                     groupmod -g $desktopUid linux
                 fi
             else
@@ -51,8 +51,7 @@ class DesktopProvisioner(
             fi
 
             if id linux >/dev/null 2>&1; then
-                current_uid="$(id -u linux)"
-                if [ "$current_uid" != "$desktopUid" ]; then
+                if [ "$(id -u linux)" != "$desktopUid" ]; then
                     usermod -u $desktopUid linux
                 fi
                 usermod -g linux -s /bin/bash linux
@@ -217,15 +216,10 @@ class DesktopProvisioner(
         File(rootfs, "etc/apt/preferences.d/hold-proroot-graphics").delete()
         runChecked(rootfs, """
             set -e
-            for package in \
+            apt-mark hold \
               xwayland kwin-common kwin-data kwin-wayland libkwin6 \
               libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 \
               mesa-libgallium mesa-vulkan-drivers
-            do
-                if dpkg-query -W "$package" >/dev/null 2>&1; then
-                    apt-mark hold "$package" >/dev/null
-                fi
-            done
         """.trimIndent())
     }
 
