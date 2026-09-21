@@ -61,7 +61,7 @@ class ProrootRunner(
             .redirectErrorStream(true)
             .apply {
                 environment().clear()
-                environment().putAll(hostEnvironment(extraEnvironment))
+                environment().putAll(hostEnvironment(fakeRoot, extraEnvironment))
             }
     }
 
@@ -132,12 +132,20 @@ class ProrootRunner(
             .start()
     }
 
-    private fun hostEnvironment(extra: Map<String, String>): MutableMap<String, String> {
+    private fun hostEnvironment(
+        fakeRoot: Boolean,
+        extra: Map<String, String>,
+    ): MutableMap<String, String> {
+        val user = if (fakeRoot) "root" else "linux"
+        val home = if (fakeRoot) "/root" else "/home/linux"
         val env = mutableMapOf(
-            "HOME" to context.filesDir.absolutePath,
+            "HOME" to home,
+            "USER" to user,
+            "LOGNAME" to user,
+            "SHELL" to "/bin/bash",
             "TMPDIR" to paths.tmpDir.absolutePath,
             "PROROOT_TMP_DIR" to paths.tmpDir.absolutePath,
-            "PATH" to "/system/bin:/system/xbin",
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG" to "C.UTF-8",
         )
         env.putAll(extra)
