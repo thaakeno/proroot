@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
+import '../diagnostics/diagnostics_screen.dart';
 
 class InstallScreen extends StatelessWidget {
   const InstallScreen({required this.controller, super.key});
@@ -147,7 +148,7 @@ class InstallScreen extends StatelessWidget {
                         ),
                       if (snapshot.detail case final detail?) ...[
                         const SizedBox(height: 12),
-                        Text(
+                        SelectableText(
                           detail,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
@@ -193,17 +194,54 @@ class InstallScreen extends StatelessWidget {
                 state: _stateFor(snapshot, start: 0.94, end: 1),
               ),
               const SizedBox(height: 22),
+              if (active) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.touch_app_outlined),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Setup continues in the background. You can use the other tabs while it runs.',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
               FilledButton.icon(
                 onPressed: controller.busy || snapshot.installed
                     ? null
                     : controller.install,
-                icon: const Icon(Icons.download_rounded),
+                icon: Icon(
+                  snapshot.phase == RuntimePhase.failed
+                      ? Icons.refresh_rounded
+                      : Icons.download_rounded,
+                ),
                 label: Text(
                   snapshot.installed
                       ? 'Linux is installed'
-                      : 'Install complete Linux PC',
+                      : snapshot.phase == RuntimePhase.failed
+                          ? 'Retry installation'
+                          : 'Install complete Linux PC',
                 ),
               ),
+              if (snapshot.phase == RuntimePhase.failed) ...[
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => DiagnosticsScreen(controller: controller),
+                    ),
+                  ),
+                  icon: const Icon(Icons.bug_report_outlined),
+                  label: const Text('Open full diagnostics'),
+                ),
+              ],
               if (snapshot.installed) ...[
                 const SizedBox(height: 10),
                 OutlinedButton.icon(
