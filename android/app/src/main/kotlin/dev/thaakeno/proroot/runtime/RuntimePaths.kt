@@ -14,6 +14,7 @@ class RuntimePaths(context: Context) {
     val cacheDir = File(files, "runtime-cache")
     val tmpDir = File(files, "runtime-tmp")
     val installProotLibDir = File(files, "install-proot-libs")
+    val aptArchivesDir = File(files, "apt-archives")
     val logsDir = File(files, "logs")
     val installLog = File(logsDir, "install.log")
     val previousInstallLog = File(logsDir, "install.previous.log")
@@ -46,6 +47,8 @@ class RuntimePaths(context: Context) {
             cacheDir,
             tmpDir,
             installProotLibDir,
+            aptArchivesDir,
+            File(aptArchivesDir, "partial"),
             logsDir,
             anlandDir,
             sharedDir,
