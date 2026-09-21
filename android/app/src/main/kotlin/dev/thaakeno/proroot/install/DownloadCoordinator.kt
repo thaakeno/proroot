@@ -36,6 +36,7 @@ class DownloadCoordinator(
     private val concurrency = Semaphore(4)
     private val lock = Any()
     private val progressById = mutableMapOf<String, Long>()
+    private val sizeById = mutableMapOf<String, Long>()
     private var lastSampleNanos = System.nanoTime()
     private var lastSampleBytes = 0L
     private var lastSpeed = 0L
@@ -50,7 +51,11 @@ class DownloadCoordinator(
 
         synchronized(lock) {
             progressById.clear()
-            assets.forEach { asset -> progressById[asset.id] = existingBytes(asset) }
+            sizeById.clear()
+            assets.forEach { asset ->
+                progressById[asset.id] = existingBytes(asset)
+                sizeById[asset.id] = asset.size
+            }
             lastSampleBytes = progressById.values.sum()
             lastSampleNanos = System.nanoTime()
             lastSpeed = 0L
@@ -265,13 +270,25 @@ class DownloadCoordinator(
             }
             lastEmitNanos = now
 
+            val completedItems = progressById.count { (id, value) ->
+                value >= (sizeById[id] ?: Long.MAX_VALUE)
+            }
+            val fraction = if (total == 0L) 0.0 else current.toDouble() / total
+
             RuntimeStatus(
                 phase = RuntimePhase.downloading,
-                progress = if (total == 0L) 0.0 else current.toDouble() / total,
+                progress = fraction,
                 message = "Downloading Linux components",
                 downloadedBytes = current,
                 totalBytes = total,
                 speedBytesPerSecond = lastSpeed,
+                stageProgress = fraction,
+                stageDetail = "Downloading ${asset.fileName}",
+                stageDownloadedBytes = current,
+                stageTotalBytes = total,
+                stageSpeedBytesPerSecond = lastSpeed,
+                completedItems = completedItems,
+                totalItems = progressById.size,
             )
         }
         status?.let(onStatus)
