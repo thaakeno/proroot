@@ -9,14 +9,10 @@ FetchContent_Declare(
     anland
     GIT_REPOSITORY https://github.com/lfdevs/anland-termux.git
     GIT_TAG ${ANLAND_GIT_TAG}
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW FALSE
+    SOURCE_SUBDIR app/src/main/jni
 )
 FetchContent_MakeAvailable(anland)
-
-add_subdirectory(
-    ${anland_SOURCE_DIR}/app/src/main/jni
-    ${CMAKE_BINARY_DIR}/anland-consumer
-)
 
 add_executable(anland_daemon
     ${anland_SOURCE_DIR}/termux/anland/anland.c
