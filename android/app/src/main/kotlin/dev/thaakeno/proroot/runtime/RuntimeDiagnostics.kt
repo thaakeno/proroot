@@ -113,7 +113,6 @@ class RuntimeDiagnostics(
             "nativeLibraryDir" to context.applicationInfo.nativeLibraryDir,
             "rootfs" to paths.rootfs.absolutePath,
             "containerRuntime" to runner.runtimeId,
-            "runtimeModeFile" to paths.runtimeModeFile.takeIf { it.isFile }?.readText()?.trim(),
             "rollbackAvailable" to installer.canRollback(),
             "anlandSocket" to paths.anlandSocket.absolutePath,
             "anlandSocketReady" to paths.anlandSocket.exists(),
