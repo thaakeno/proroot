@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
 
 class HomeScreen extends StatelessWidget {
