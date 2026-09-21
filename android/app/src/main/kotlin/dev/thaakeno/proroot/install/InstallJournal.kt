@@ -52,7 +52,12 @@ class InstallJournal(
                     "phase=" + status.phase.name + " progress=" + percent + "% " +
                     "downloaded=" + status.downloadedBytes + "/" + status.totalBytes + " " +
                     "speed=" + status.speedBytesPerSecond + " " +
-                    "message=" + status.message + "\n",
+                    "stageProgress=" + (status.stageProgress?.let { "%.1f".format(it * 100.0) } ?: "-") + "% " +
+                    "stageBytes=" + status.stageDownloadedBytes + "/" + status.stageTotalBytes + " " +
+                    "stageSpeed=" + status.stageSpeedBytesPerSecond + " " +
+                    "items=" + status.completedItems + "/" + status.totalItems + " " +
+                    "message=" + status.message +
+                    (status.stageDetail?.let { " detail=" + it } ?: "") + "\n",
             )
             lastLoggedAtMs = now
             lastPhase = status.phase
