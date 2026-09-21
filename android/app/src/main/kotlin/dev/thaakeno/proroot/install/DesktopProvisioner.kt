@@ -1,7 +1,9 @@
 package dev.thaakeno.proroot.install
 
+import dev.thaakeno.proroot.runtime.CommandResult
 import dev.thaakeno.proroot.runtime.GuestRunner
 import java.io.File
+import kotlin.math.max
 
 class DesktopProvisioner(
     private val runner: GuestRunner,
@@ -14,51 +16,96 @@ class DesktopProvisioner(
         rootfs: File,
         onProgress: (ProvisioningStage) -> Unit = {},
     ) {
-        onProgress(ProvisioningStage(0.45, "Checking installer runtime"))
+        onProgress(ProvisioningStage(0.45, "Checking installer runtime", 900))
         runChecked(rootfs, "/bin/true")
 
-        onProgress(ProvisioningStage(0.46, "Preparing Debian package sources"))
+        onProgress(ProvisioningStage(0.46, "Preparing Debian package sources", 890))
         prepareConfiguration(rootfs)
         runChecked(rootfs, "apt-get update")
 
-        onProgress(ProvisioningStage(0.49, "Validating Debian desktop packages"))
-        runChecked(rootfs, """
-            set -e
-            packages='
-              ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux
-              dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower
-              python3-dbus python3-gi gir1.2-glib-2.0
-              xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info
-              xdg-desktop-portal xdg-desktop-portal-kde
-              kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin
-              breeze breeze-icon-theme kde-config-gtk-style kio-extras
-              konsole dolphin kate ark okular kde-spectacle gwenview kcalc
-              xwayland libgtk-3-bin
-              pipewire pipewire-pulse wireplumber
-              fonts-noto fonts-noto-cjk fonts-noto-color-emoji fonts-liberation
-              firefox-esr mesa-utils vulkan-tools glmark2
-              libreoffice gimp vlc
-              build-essential cmake pkg-config python3 python3-pip nodejs npm
-              git openssh-client rsync file procps iproute2 net-tools jq ripgrep fd-find
-              htop nano vim less unzip xz-utils
-            '
+        val packageGroups = listOf(
+            PackageGroup(
+                start = 0.50,
+                end = 0.56,
+                message = "Installing Debian base services",
+                expectedSeconds = 90,
+                etaAfterSeconds = 770,
+                packages = """
+                    ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux
+                    dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower
+                    python3-dbus python3-gi gir1.2-glib-2.0
+                    xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info
+                    xdg-desktop-portal xdg-desktop-portal-kde
+                """.trimIndent(),
+            ),
+            PackageGroup(
+                start = 0.56,
+                end = 0.64,
+                message = "Installing KDE Plasma desktop",
+                expectedSeconds = 220,
+                etaAfterSeconds = 550,
+                packages = """
+                    kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin
+                    breeze breeze-icon-theme kde-config-gtk-style kio-extras
+                    konsole dolphin kate ark okular kde-spectacle gwenview kcalc
+                    xwayland libgtk-3-bin pipewire pipewire-pulse wireplumber
+                """.trimIndent(),
+            ),
+            PackageGroup(
+                start = 0.64,
+                end = 0.70,
+                message = "Installing desktop applications",
+                expectedSeconds = 160,
+                etaAfterSeconds = 390,
+                packages = """
+                    fonts-noto fonts-noto-cjk fonts-noto-color-emoji fonts-liberation
+                    firefox-esr mesa-utils vulkan-tools glmark2
+                    libreoffice gimp vlc
+                """.trimIndent(),
+            ),
+            PackageGroup(
+                start = 0.70,
+                end = 0.74,
+                message = "Installing development tools",
+                expectedSeconds = 100,
+                etaAfterSeconds = 290,
+                packages = """
+                    build-essential cmake pkg-config python3 python3-pip nodejs npm
+                    git openssh-client rsync file procps iproute2 net-tools jq ripgrep fd-find
+                    htop nano vim less unzip xz-utils
+                """.trimIndent(),
+            ),
+        )
 
+        val allPackages = packageGroups
+            .flatMap { group -> group.packages.split(Regex("\\s+")) }
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+
+        onProgress(ProvisioningStage(0.49, "Validating Debian desktop packages", 860))
+        runChecked(
+            rootfs,
+            """
+            set -e
+            packages='$allPackages'
             missing=''
-            for package in ${'$'}packages; do
-                if ! apt-cache show "${'$'}package" >/dev/null 2>&1; then
-                    missing="${'$'}missing ${'$'}package"
+            for package in $packages; do
+                if ! apt-cache show "$package" >/dev/null 2>&1; then
+                    missing="$missing $package"
                 fi
             done
-
-            if [ -n "${'$'}missing" ]; then
-                printf 'Missing Debian packages:%s\\n' "${'$'}missing" >&2
+            if [ -n "$missing" ]; then
+                printf 'Missing Debian packages:%s\n' "$missing" >&2
                 exit 100
             fi
+            """.trimIndent(),
+        )
 
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${'$'}packages
-        """.trimIndent())
+        packageGroups.forEach { group ->
+            installPackageGroup(rootfs, group, onProgress)
+        }
 
-        onProgress(ProvisioningStage(0.66, "Creating persistent Linux desktop user"))
+        onProgress(ProvisioningStage(0.75, "Creating persistent Linux desktop user", 270))
         runChecked(rootfs, """
             set -e
 
@@ -91,22 +138,22 @@ class DesktopProvisioner(
             update-mime-database /usr/share/mime || true
         """.trimIndent())
 
-        onProgress(ProvisioningStage(0.70, "Installing Anland, KWin and XWayland"))
+        onProgress(ProvisioningStage(0.78, "Installing Anland, KWin and XWayland", 250))
         installPinnedDesktopStack(rootfs)
 
-        onProgress(ProvisioningStage(0.74, "Installing Brave Browser"))
+        onProgress(ProvisioningStage(0.82, "Installing Brave Browser", 200))
         installBrave(rootfs)
 
-        onProgress(ProvisioningStage(0.78, "Installing Visual Studio Code"))
+        onProgress(ProvisioningStage(0.85, "Installing Visual Studio Code", 160))
         installVsCode(rootfs)
 
-        onProgress(ProvisioningStage(0.82, "Configuring rootless desktop services"))
+        onProgress(ProvisioningStage(0.88, "Configuring rootless desktop services", 100))
         rootlessServices.configure(rootfs)
 
-        onProgress(ProvisioningStage(0.84, "Configuring the Linux desktop"))
+        onProgress(ProvisioningStage(0.90, "Configuring the Linux desktop", 75))
         configureDesktop(rootfs)
 
-        onProgress(ProvisioningStage(0.85, "Protecting the verified graphics stack"))
+        onProgress(ProvisioningStage(0.91, "Protecting the verified graphics stack", 55))
         protectGraphicsStack(rootfs)
     }
 
@@ -147,6 +194,61 @@ class DesktopProvisioner(
             brave-browser-stable --version
             firefox-esr --version
         """.trimIndent(), fakeRoot = false)
+    }
+
+    private fun installPackageGroup(
+        rootfs: File,
+        group: PackageGroup,
+        onProgress: (ProvisioningStage) -> Unit,
+    ) {
+        val packages = group.packages
+            .split(Regex("\\s+"))
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+
+        onProgress(
+            ProvisioningStage(
+                group.start,
+                group.message,
+                group.expectedSeconds + group.etaAfterSeconds,
+            ),
+        )
+
+        val started = System.nanoTime()
+        var lastProgressPublishMs = 0L
+        val command = "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages"
+
+        journal.commandStart(command)
+        val result = runner.execStreaming(
+            command = command,
+            timeoutSeconds = 1_800,
+            rootfs = rootfs,
+            fakeRoot = true,
+        ) { line ->
+            journal.commandOutput(line)
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - lastProgressPublishMs >= 1_000L) {
+                lastProgressPublishMs = nowMs
+                val elapsed = (System.nanoTime() - started) / 1_000_000_000.0
+                val fraction = (elapsed / group.expectedSeconds.toDouble()).coerceIn(0.0, 0.90)
+                val progress = group.start + (group.end - group.start) * fraction
+                val eta = max(
+                    0L,
+                    (group.expectedSeconds - elapsed.toLong()) + group.etaAfterSeconds,
+                )
+                onProgress(ProvisioningStage(progress, group.message, eta))
+            }
+        }
+        journal.commandEnd(result)
+        checkResult(result)
+
+        onProgress(
+            ProvisioningStage(
+                group.end,
+                group.message,
+                group.etaAfterSeconds,
+            ),
+        )
     }
 
     private fun prepareConfiguration(rootfs: File) {
@@ -251,8 +353,21 @@ class DesktopProvisioner(
             fakeRoot = fakeRoot,
         )
         journal.command(command, result)
+        checkResult(result)
+    }
+
+    private fun checkResult(result: CommandResult) {
         check(result.successful) {
             "Provisioning failed via ${runner.runtimeId} (exit ${result.exitCode}). Full output is in install.log."
         }
     }
+
+    private data class PackageGroup(
+        val start: Double,
+        val end: Double,
+        val message: String,
+        val expectedSeconds: Long,
+        val etaAfterSeconds: Long,
+        val packages: String,
+    )
 }
