@@ -44,18 +44,18 @@ class DesktopProvisioner(
             '
 
             missing=''
-            for package in $packages; do
-                if ! apt-cache show "$package" >/dev/null 2>&1; then
-                    missing="$missing $package"
+            for package in ${'$'}packages; do
+                if ! apt-cache show "${'$'}package" >/dev/null 2>&1; then
+                    missing="${'$'}missing ${'$'}package"
                 fi
             done
 
-            if [ -n "$missing" ]; then
-                printf 'Missing Debian packages:%s\\n' "$missing" >&2
+            if [ -n "${'$'}missing" ]; then
+                printf 'Missing Debian packages:%s\\n' "${'$'}missing" >&2
                 exit 100
             fi
 
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${'$'}packages
         """.trimIndent())
 
         onProgress(ProvisioningStage(0.66, "Creating persistent Linux desktop user"))
