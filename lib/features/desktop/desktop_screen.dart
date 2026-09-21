@@ -6,12 +6,10 @@ import 'native_desktop_view.dart';
 class DesktopScreen extends StatefulWidget {
   const DesktopScreen({
     required this.controller,
-    required this.onExitDesktop,
     super.key,
   });
 
   final RuntimeController controller;
-  final VoidCallback onExitDesktop;
 
   @override
   State<DesktopScreen> createState() => _DesktopScreenState();
@@ -142,14 +140,4 @@ class _DesktopScreenState extends State<DesktopScreen> {
     );
   }
 
-  Future<void> _launch(String desktopId) async {
-    try {
-      await widget.controller.launchApp(desktopId);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not launch app: $error')),
-      );
-    }
-  }
 }
