@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-only-dsha-style
+# rebuild marker: installer-runtime-split
 
 on:
   push:
