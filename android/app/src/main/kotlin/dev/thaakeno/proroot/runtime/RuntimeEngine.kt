@@ -261,7 +261,23 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     fun setDisplayOptions(refresh: Int, scale: Double) {
         refreshRate = refresh.coerceIn(60, 165)
-        this.scale = scale.coerceIn(0.75, 2.0)
+        val safeScale = scale.coerceIn(0.75, 2.0)
+        val scaleChanged = this.scale != safeScale
+        this.scale = safeScale
+
+        if (scaleChanged && session.isRunning()) {
+            scope.launch {
+                mutex.withLock {
+                    if (!session.isRunning()) return@withLock
+                    val result = session.applyScale(safeScale)
+                    if (!result.successful) {
+                        File(paths.logsDir, "display-controls.log").appendText(
+                            "Live scale $safeScale failed (exit ${result.exitCode}):\n${result.output}\n",
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun diagnostics(): Map<String, Any?> {
