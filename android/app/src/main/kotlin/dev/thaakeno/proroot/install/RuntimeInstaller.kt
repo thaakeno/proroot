@@ -572,12 +572,9 @@ class RuntimeInstaller(
         )
         marker.writeText("ok\n")
 
-        journal.command(
+        journal.note(
             "Repairing legacy PRoot link2symlink targets",
-            CommandResult(
-                exitCode = 0,
-                output = "rewrittenSymlinks=$repaired\n",
-            ),
+            "rewrittenSymlinks=$repaired\n",
         )
     }
 
@@ -631,9 +628,26 @@ class RuntimeInstaller(
     private fun repairDpkgDatabaseIfNeeded(rootfs: File): Int {
         val dpkgDir = File(rootfs, "var/lib/dpkg")
         val status = File(dpkgDir, "status")
+        val statusOldFile = File(dpkgDir, "status-old")
         val currentBytes = readDpkgStatusBytes(status)
         val currentCount = currentBytes?.let(::countDpkgPackages) ?: 0
-        if (currentCount >= MIN_HEALTHY_DPKG_PACKAGES) {
+
+        if (currentCount >= MIN_HEALTHY_DPKG_PACKAGES && currentBytes != null) {
+            var normalized = 0
+            if (Files.isSymbolicLink(status.toPath())) {
+                writeDpkgStatus(status, currentBytes)
+                normalized += 1
+            }
+            if (Files.isSymbolicLink(statusOldFile.toPath())) {
+                writeDpkgStatus(statusOldFile, currentBytes)
+                normalized += 1
+            }
+            if (normalized > 0) {
+                journal.note(
+                    "Normalizing dpkg status files",
+                    "regularizedSymlinks=$normalized\npackageRecords=$currentCount\n",
+                )
+            }
             return currentCount
         }
 
@@ -648,18 +662,34 @@ class RuntimeInstaller(
             )
         }
 
-        val statusOld = healthySnapshot(File(dpkgDir, "status-old"))
+        val statusOld = healthySnapshot(statusOldFile)
         val newestBackup = File(rootfs, "var/backups").listFiles()
             ?.asSequence()
             ?.filter { it.isFile && it.name.startsWith("dpkg.status") }
             ?.sortedByDescending(File::lastModified)
             ?.mapNotNull(::healthySnapshot)
             ?.firstOrNull()
-        val best = statusOld ?: newestBackup
+
+        val orphanedLinkPayload = sequenceOf(File(rootfs, ".l2s"), dpkgDir)
+            .flatMap { directory ->
+                directory.listFiles()?.asSequence() ?: emptySequence()
+            }
+            .filter { candidate ->
+                candidate.name.startsWith(".l2s.status") &&
+                    candidate.isFile &&
+                    !Files.isSymbolicLink(candidate.toPath())
+            }
+            .mapNotNull(::healthySnapshot)
+            .maxWithOrNull(
+                compareBy<DpkgStatusSnapshot> { it.packageCount }
+                    .thenBy { it.source.lastModified() },
+            )
+
+        val best = statusOld ?: newestBackup ?: orphanedLinkPayload
         check(best != null) {
             "The Debian dpkg database is damaged (only $currentCount package records) " +
-                "and no healthy status backup was found. APT was not run, so the rootfs " +
-                "was left untouched."
+                "and no healthy status backup or recoverable link payload was found. " +
+                "APT was not run, so the rootfs was left untouched."
         }
 
         val recoveryDir = File(paths.logsDir, "dpkg-recovery").apply { mkdirs() }
@@ -673,28 +703,24 @@ class RuntimeInstaller(
         }
 
         writeDpkgStatus(status, best.bytes)
-        writeDpkgStatus(File(dpkgDir, "status-old"), best.bytes)
+        writeDpkgStatus(statusOldFile, best.bytes)
 
-        journal.command(
+        journal.note(
             "Restoring damaged dpkg database",
-            CommandResult(
-                exitCode = 0,
-                output = buildString {
-                    append("oldPackageRecords=")
-                    append(currentCount)
-                    append('\n')
-                    append("restoredPackageRecords=")
-                    append(best.packageCount)
-                    append('\n')
-                    append("source=")
-                    append(best.source.absolutePath)
-                    append('\n')
-                },
-            ),
+            buildString {
+                append("oldPackageRecords=")
+                append(currentCount)
+                append('\n')
+                append("restoredPackageRecords=")
+                append(best.packageCount)
+                append('\n')
+                append("source=")
+                append(best.source.absolutePath)
+                append('\n')
+            },
         )
         return best.packageCount
     }
-
     private fun readDpkgStatusBytes(file: File): ByteArray? =
         runCatching {
             if (file.name.endsWith(".gz")) {

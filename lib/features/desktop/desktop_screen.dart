@@ -93,7 +93,10 @@ class _DesktopScreenState extends State<DesktopScreen> {
             Positioned.fill(
               child: _FailureOverlay(
                 snapshot: snapshot,
-                onRetry: widget.controller.start,
+                onRetry: snapshot.installed
+                    ? widget.controller.start
+                    : widget.controller.install,
+                retryLabel: snapshot.installed ? 'Retry' : 'Retry setup',
                 onDetails: () => _showFailureDetails(snapshot),
               ),
             ),
@@ -306,11 +309,13 @@ class _FailureOverlay extends StatelessWidget {
   const _FailureOverlay({
     required this.snapshot,
     required this.onRetry,
+    required this.retryLabel,
     required this.onDetails,
   });
 
   final RuntimeSnapshot snapshot;
   final Future<void> Function() onRetry;
+  final String retryLabel;
   final VoidCallback onDetails;
 
   @override
@@ -367,7 +372,7 @@ class _FailureOverlay extends StatelessWidget {
                   FilledButton.icon(
                     onPressed: onRetry,
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Retry'),
+                    label: Text(retryLabel),
                   ),
                 ],
               ),

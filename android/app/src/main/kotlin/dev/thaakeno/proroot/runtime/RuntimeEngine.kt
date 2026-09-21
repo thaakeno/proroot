@@ -227,11 +227,29 @@ class RuntimeEngine private constructor(private val context: Context) {
     }
 
     private fun publishStartFailure(primary: Throwable, original: Throwable? = null) {
+        val recentLogs = paths.logsDir.listFiles()
+            ?.asSequence()
+            ?.filter(File::isFile)
+            ?.sortedByDescending(File::lastModified)
+            ?.take(4)
+            ?.joinToString(separator = "\n\n") { log ->
+                buildString {
+                    appendLine("===== ${log.name} =====")
+                    append(log.readText().takeLast(3_500))
+                }
+            }
+            .orEmpty()
+
         RuntimeEvents.publish(
             RuntimeStatus(
                 phase = RuntimePhase.failed,
                 message = "Could not start Linux",
                 detail = buildString {
+                    if (recentLogs.isNotBlank()) {
+                        appendLine(recentLogs)
+                        appendLine()
+                    }
+                    appendLine("===== startup exception =====")
                     appendLine(primary.stackTraceToString())
                     if (original != null && original !== primary) {
                         appendLine()
@@ -244,7 +262,6 @@ class RuntimeEngine private constructor(private val context: Context) {
         )
         stopForegroundHost()
     }
-
     fun stop() {
         scope.launch {
             mutex.withLock {

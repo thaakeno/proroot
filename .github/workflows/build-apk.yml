@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: validated-runtime-health-fix
+# rebuild marker: dpkg-link-recovery-v2
 
 on:
   push:

@@ -116,6 +116,19 @@ class InstallJournal(
         }
     }
 
+    fun note(title: String, text: String) {
+        synchronized(lock) {
+            append(
+                buildString {
+                    appendLine()
+                    appendLine("===== $title =====")
+                    append(text)
+                    if (!text.endsWith("\n")) appendLine()
+                },
+            )
+        }
+    }
+
     fun failure(error: Throwable) {
         val report = buildString {
             appendLine("===== installation failure =====")
