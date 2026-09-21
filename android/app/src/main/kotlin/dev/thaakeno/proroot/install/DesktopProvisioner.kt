@@ -81,7 +81,7 @@ class DesktopProvisioner(
             test -x /usr/bin/dolphin
             test -x /usr/bin/firefox-esr
             test -x /usr/bin/code
-            test -x /usr/bin/brave-browser
+            test -x /usr/bin/brave-browser-stable
             test -x /usr/local/lib/proroot/start-desktop.sh
             test -c /dev/kgsl-3d0
             test -r /proc/stat
@@ -98,7 +98,7 @@ class DesktopProvisioner(
               vulkaninfo --summary 2>&1 | tee /tmp/proroot-vulkan-summary.txt
 
             grep -Eiq 'Adreno|turnip' /tmp/proroot-vulkan-summary.txt
-            brave-browser --version
+            brave-browser-stable --version
             firefox-esr --version
         """.trimIndent(), fakeRoot = false)
     }
