@@ -23,8 +23,8 @@ object AssetCatalog {
             "59f9c7486d6a10ad50a13622bf1d1bbf5accd015d630e4b2b0152a80577dcc64",
             825_848, "xwayland_24.1.6-91_arm64.deb"),
         RuntimeAsset("brave-arm64-1.95.104", RuntimeAssetKind.BRAVE,
-            "https://github.com/brave/brave-browser/releases/download/v1.95.104/brave-browser-1.95.104-linux-arm64.zip",
-            "9f2dab1cd328cdaa88302be319bd269d59a8a84c8dfc6ccaa71287b8c0629ac2",
-            205_999_715, "brave-browser-1.95.104-linux-arm64.zip"),
+            "https://github.com/brave/brave-browser/releases/download/v1.95.104/brave-browser_1.95.104_arm64.deb",
+            "251ee83fa383db6106ae6140df0975689b226d15ceb96cdb4147cb90cd7c25ba",
+            140_194_012, "brave-browser_1.95.104_arm64.deb"),
     )
 }
