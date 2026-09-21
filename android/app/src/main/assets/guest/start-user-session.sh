@@ -61,34 +61,42 @@ access.rules = [
 ]
 EOF
 
-export XDG_CONFIG_HOME="$pipewire_config"
 export PIPEWIRE_RUNTIME_DIR="$runtime"
 export PULSE_RUNTIME_PATH="$pulse_dir"
 export PULSE_SERVER="unix:$pulse_dir/native"
 
-pipewire >"$log_dir/pipewire.log" 2>&1 &
+env XDG_CONFIG_HOME="$pipewire_config" pipewire >"$log_dir/pipewire.log" 2>&1 &
 pipewire_pid=$!
 if wait_for_socket "$runtime/pipewire-0"; then
-    wireplumber >"$log_dir/wireplumber.log" 2>&1 &
+    env XDG_CONFIG_HOME="$pipewire_config" wireplumber >"$log_dir/wireplumber.log" 2>&1 &
     wireplumber_pid=$!
-    pipewire-pulse >"$log_dir/pipewire-pulse.log" 2>&1 &
+    env XDG_CONFIG_HOME="$pipewire_config" pipewire-pulse >"$log_dir/pipewire-pulse.log" 2>&1 &
     pulse_pid=$!
     wait_for_socket "$pulse_dir/native" 50 || true
 fi
 
 env_file="$runtime/proroot-session.env"
+persist_env() {
+    local name="$1"
+    if [[ -v "$name" ]]; then
+        printf 'export %s=%q\n' "$name" "${!name}"
+    fi
+}
+
 {
-    printf 'export DBUS_SESSION_BUS_ADDRESS=%q\n' "$DBUS_SESSION_BUS_ADDRESS"
-    printf 'export DBUS_SYSTEM_BUS_ADDRESS=%q\n' "${DBUS_SYSTEM_BUS_ADDRESS:-unix:path=/run/dbus/system_bus_socket}"
-    printf 'export XDG_RUNTIME_DIR=%q\n' "$XDG_RUNTIME_DIR"
-    printf 'export PIPEWIRE_RUNTIME_DIR=%q\n' "$PIPEWIRE_RUNTIME_DIR"
-    printf 'export PULSE_RUNTIME_PATH=%q\n' "$PULSE_RUNTIME_PATH"
-    printf 'export PULSE_SERVER=%q\n' "$PULSE_SERVER"
-    printf 'export XDG_SESSION_TYPE=wayland\n'
-    printf 'export XDG_CURRENT_DESKTOP=KDE\n'
-    printf 'export XDG_SESSION_DESKTOP=KDE\n'
-    printf 'export QT_QPA_PLATFORM=wayland\n'
-    printf 'export GDK_BACKEND=wayland,x11\n'
+    for name in \
+        HOME USER LOGNAME SHELL LANG LC_ALL \
+        XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR \
+        XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+        DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS \
+        PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH PULSE_SERVER \
+        QT_QPA_PLATFORM QT_SCALE_FACTOR GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
+        ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
+        EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
+        FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS PROROOT_REFRESH_HZ
+    do
+        persist_env "$name"
+    done
 } >"$env_file"
 chmod 0600 "$env_file"
 
