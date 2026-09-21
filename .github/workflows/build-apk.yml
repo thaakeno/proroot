@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: validated-package-set
+# rebuild marker: package-architecture-fix
 
 on:
   push:
