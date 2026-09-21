@@ -22,7 +22,7 @@
             android:screenOrientation="unspecified"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustNothing">
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
@@ -41,9 +41,6 @@
                 android:value="Runs the user's local Linux desktop environment" />
         </service>
 
-        <meta-data
-            android:name="io.flutter.embedding.android.EnableHcpp"
-            android:value="true" />
         <meta-data android:name="flutterEmbedding" android:value="2" />
     </application>
 </manifest>

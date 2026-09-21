@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+args=()
+for arg in "$@"; do
+    if [[ "$arg" == "--xwayland" ]]; then
+        continue
+    fi
+    args+=("$arg")
+done
+
+# Plasma 6.3 asks for Xwayland unconditionally. Android's app seccomp policy
+# kills this Xwayland build with SIGSYS, while the desktop and bundled apps use
+# native Wayland. Keep the canonical KWin wrapper and omit only Xwayland.
+exec /usr/bin/kwin_wayland_wrapper "${args[@]}"

@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: unified-desktop-identity-v6
+# rebuild marker: stable-wayland-surface-v7
 
 on:
   push:

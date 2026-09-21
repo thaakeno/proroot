@@ -70,6 +70,7 @@ jobs:
         run: |
           bash -n android/app/src/main/assets/guest/start-desktop.sh
           bash -n android/app/src/main/assets/guest/start-user-session.sh
+          bash -n android/app/src/main/assets/guest/kwin_wayland_wrapper
           bash -n android/app/src/main/assets/guest/start-system-services.sh
           bash -n android/app/src/main/assets/guest/launch-desktop-app.sh
           bash -n android/app/src/main/assets/guest/session-env.sh

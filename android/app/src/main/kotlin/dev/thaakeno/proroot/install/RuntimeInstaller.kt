@@ -489,7 +489,8 @@ class RuntimeInstaller(
                 target.outputStream().use { output -> input.copyTo(output) }
             }
 
-            val executable = name.startsWith("start-") ||
+            val executable = name == "kwin_wayland_wrapper" ||
+                name.startsWith("start-") ||
                 name.startsWith("launch-") ||
                 name.startsWith("set-") ||
                 name.startsWith("check-") ||
