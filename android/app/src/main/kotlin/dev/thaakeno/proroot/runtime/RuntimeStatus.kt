@@ -1,0 +1,25 @@
+package dev.thaakeno.proroot.runtime
+
+data class RuntimeStatus(
+    val phase: RuntimePhase = RuntimePhase.missing,
+    val progress: Double = 0.0,
+    val message: String = "Linux environment is not installed",
+    val downloadedBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val speedBytesPerSecond: Long = 0,
+    val installed: Boolean = false,
+    val running: Boolean = false,
+    val detail: String? = null,
+) {
+    fun asMap(): Map<String, Any?> = mapOf(
+        "phase" to phase.name,
+        "progress" to progress.coerceIn(0.0, 1.0),
+        "message" to message,
+        "downloadedBytes" to downloadedBytes,
+        "totalBytes" to totalBytes,
+        "speedBytesPerSecond" to speedBytesPerSecond,
+        "installed" to installed,
+        "running" to running,
+        "detail" to detail,
+    )
+}
