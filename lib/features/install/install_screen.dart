@@ -21,24 +21,14 @@ class InstallScreen extends StatelessWidget {
     return '${size.toStringAsFixed(unit > 1 ? 1 : 0)} ${units[unit]}';
   }
 
-  String _eta(RuntimeSnapshot snapshot) {
-    final speed = snapshot.speedBytesPerSecond;
-    final remaining = snapshot.totalBytes - snapshot.downloadedBytes;
-    if (speed <= 0 || remaining <= 0) {
-      return '';
-    }
-
-    final seconds = (remaining / speed).ceil();
-    if (seconds < 60) {
-      return '~${seconds}s left';
-    }
-    final minutes = (seconds / 60).ceil();
-    if (minutes < 60) {
-      return '~${minutes}m left';
-    }
+  String _duration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
     final hours = seconds ~/ 3600;
-    final restMinutes = ((seconds % 3600) / 60).ceil();
-    return '~${hours}h ${restMinutes}m left';
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+    if (hours > 0) return '${hours}h ${minutes}m';
+    if (minutes > 0 && secs > 0) return '${minutes}m ${secs}s';
+    return '${minutes}m';
   }
 
   _StageState _stateFor(
@@ -67,7 +57,10 @@ class InstallScreen extends StatelessWidget {
       RuntimePhase.provisioning,
     }.contains(snapshot.phase);
     final percent = (snapshot.progress * 100).round();
-    final eta = _eta(snapshot);
+    final elapsed = _duration(snapshot.elapsedSeconds);
+    final eta = snapshot.etaSeconds == null
+        ? 'Calculating…'
+        : '~${_duration(snapshot.etaSeconds!)}';
 
     return CustomScrollView(
       slivers: [
@@ -131,13 +124,7 @@ class InstallScreen extends StatelessWidget {
                               Text(
                                 '${_bytes(snapshot.speedBytesPerSecond)}/s',
                               ),
-                              if (eta.isNotEmpty) ...[
-                                const SizedBox(width: 10),
-                                Text(
-                                  eta,
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                              ],
+
                             ],
                           ],
                         )
@@ -146,6 +133,17 @@ class InstallScreen extends StatelessWidget {
                           '$percent% of the complete Linux environment',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                      if (active) ...[
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 16,
+                          runSpacing: 6,
+                          children: [
+                            _TimeStat(label: 'Elapsed', value: elapsed),
+                            _TimeStat(label: 'ETA', value: eta),
+                          ],
+                        ),
+                      ],
                       if (snapshot.detail case final detail?) ...[
                         const SizedBox(height: 12),
                         SelectableText(
@@ -162,14 +160,14 @@ class InstallScreen extends StatelessWidget {
                 title: 'Base system',
                 subtitle: 'Debian 13 ARM64 with verified checksum',
                 icon: Icons.inventory_2_outlined,
-                state: _stateFor(snapshot, start: 0, end: 0.46),
+                state: _stateFor(snapshot, start: 0, end: 0.49),
               ),
               const SizedBox(height: 10),
               _Stage(
                 title: 'Desktop',
                 subtitle: 'KDE Plasma + Anland Wayland + XWayland',
                 icon: Icons.desktop_windows_outlined,
-                state: _stateFor(snapshot, start: 0.46, end: 0.74),
+                state: _stateFor(snapshot, start: 0.49, end: 0.78),
               ),
               const SizedBox(height: 10),
               _Stage(
@@ -177,21 +175,21 @@ class InstallScreen extends StatelessWidget {
                 subtitle:
                     'Brave, Firefox, Konsole, VS Code, Dolphin, Kate and tools',
                 icon: Icons.apps_rounded,
-                state: _stateFor(snapshot, start: 0.74, end: 0.89),
+                state: _stateFor(snapshot, start: 0.78, end: 0.92),
               ),
               const SizedBox(height: 10),
               _Stage(
                 title: 'GPU stack',
                 subtitle: 'Mesa Freedreno + Turnip for Adreno 840',
                 icon: Icons.memory_rounded,
-                state: _stateFor(snapshot, start: 0.89, end: 0.94),
+                state: _stateFor(snapshot, start: 0.92, end: 0.96),
               ),
               const SizedBox(height: 10),
               _Stage(
                 title: 'Verification',
                 subtitle: 'GPU, Linux ABI, browsers and atomic activation',
                 icon: Icons.verified_outlined,
-                state: _stateFor(snapshot, start: 0.94, end: 1),
+                state: _stateFor(snapshot, start: 0.96, end: 1),
               ),
               const SizedBox(height: 22),
               if (active) ...[
@@ -254,6 +252,32 @@ class InstallScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _TimeStat extends StatelessWidget {
+  const _TimeStat({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        '$label  $value',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(fontWeight: FontWeight.w700),
+      ),
     );
   }
 }
