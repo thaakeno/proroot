@@ -80,16 +80,28 @@ class RuntimeDiagnostics(
                 ),
                 "desktopApplications" to probe(
                     """
+                    set -e
                     brave-browser-stable --version
                     firefox-esr --version
                     code --version | head -n1
-                    konsole --version
+                    test -x /usr/bin/konsole
+                    test -x /usr/bin/dolphin
+                    test -x /usr/bin/kate
                     """.trimIndent(),
                     fakeRoot = false,
                     timeoutSeconds = 10,
                 ),
             ).apply {
                 if (session.isRunning()) {
+                    val desktopHealth = session.health()
+                    put(
+                        "desktopHealth",
+                        mapOf(
+                            "ok" to desktopHealth.successful,
+                            "exitCode" to desktopHealth.exitCode,
+                            "output" to desktopHealth.output.takeLast(12_000),
+                        ),
+                    )
                     put(
                         "display",
                         probe(
