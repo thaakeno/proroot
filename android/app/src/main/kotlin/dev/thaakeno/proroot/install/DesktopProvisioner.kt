@@ -7,9 +7,15 @@ class DesktopProvisioner(
     private val runner: ProrootRunner,
     private val desktopUid: Int,
 ) {
-    fun provisionBase(rootfs: File) {
+    fun provisionBase(
+        rootfs: File,
+        onProgress: (ProvisioningStage) -> Unit = {},
+    ) {
+        onProgress(ProvisioningStage(0.46, "Preparing Debian package sources"))
         prepareConfiguration(rootfs)
         runChecked(rootfs, "apt-get update")
+
+        onProgress(ProvisioningStage(0.50, "Installing Plasma and desktop applications"))
         runChecked(rootfs, """
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux \
@@ -30,6 +36,7 @@ class DesktopProvisioner(
               htop nano vim less unzip xz-utils
         """.trimIndent())
 
+        onProgress(ProvisioningStage(0.66, "Creating persistent Linux desktop user"))
         runChecked(rootfs, """
             set -e
 
@@ -64,10 +71,19 @@ class DesktopProvisioner(
             update-mime-database /usr/share/mime || true
         """.trimIndent())
 
+        onProgress(ProvisioningStage(0.70, "Installing Anland, KWin and XWayland"))
         installPinnedDesktopStack(rootfs)
+
+        onProgress(ProvisioningStage(0.74, "Installing Brave Browser"))
         installBrave(rootfs)
+
+        onProgress(ProvisioningStage(0.78, "Installing Visual Studio Code"))
         installVsCode(rootfs)
+
+        onProgress(ProvisioningStage(0.82, "Configuring the Linux desktop"))
         configureDesktop(rootfs)
+
+        onProgress(ProvisioningStage(0.85, "Protecting the verified graphics stack"))
         protectGraphicsStack(rootfs)
     }
 
