@@ -111,30 +111,97 @@ class InstallScreen extends StatelessWidget {
                         borderRadius: BorderRadius.circular(99),
                       ),
                       const SizedBox(height: 12),
-                      if (snapshot.phase == RuntimePhase.downloading)
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '${_bytes(snapshot.downloadedBytes)} / '
-                                '${_bytes(snapshot.totalBytes)}',
-                              ),
-                            ),
-                            if (snapshot.speedBytesPerSecond > 0) ...[
-                              Text(
-                                '${_bytes(snapshot.speedBytesPerSecond)}/s',
-                              ),
-
-                            ],
-                          ],
-                        )
-                      else if (active)
+                      if (active)
                         Text(
                           '$percent% of the complete Linux environment',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                      if (active &&
+                          (snapshot.stageProgress != null ||
+                              (snapshot.stageDetail?.isNotEmpty ?? false))) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      'Current task',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  if (snapshot.stageProgress != null)
+                                    Text(
+                                      '${(snapshot.stageProgress! * 100).round()}%',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              if (snapshot.stageProgress != null) ...[
+                                const SizedBox(height: 8),
+                                LinearProgressIndicator(
+                                  value: snapshot.stageProgress,
+                                  minHeight: 7,
+                                  borderRadius: BorderRadius.circular(99),
+                                ),
+                              ],
+                              if (snapshot.stageDetail case final detail?) ...[
+                                const SizedBox(height: 9),
+                                SelectableText(
+                                  detail,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                              if (snapshot.stageTotalBytes > 0 ||
+                                  snapshot.totalItems > 0) ...[
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 10,
+                                  runSpacing: 6,
+                                  children: [
+                                    if (snapshot.stageTotalBytes > 0)
+                                      _TimeStat(
+                                        label: 'Data',
+                                        value:
+                                            '${_bytes(snapshot.stageDownloadedBytes)} / '
+                                            '${_bytes(snapshot.stageTotalBytes)}',
+                                      ),
+                                    if (snapshot.stageSpeedBytesPerSecond > 0)
+                                      _TimeStat(
+                                        label: 'Speed',
+                                        value:
+                                            '${_bytes(snapshot.stageSpeedBytesPerSecond)}/s',
+                                      ),
+                                    if (snapshot.totalItems > 0)
+                                      _TimeStat(
+                                        label: 'Items',
+                                        value:
+                                            '${snapshot.completedItems} / '
+                                            '${snapshot.totalItems}',
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
                       if (active) ...[
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         Wrap(
                           spacing: 16,
                           runSpacing: 6,
