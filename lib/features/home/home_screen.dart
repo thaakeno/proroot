@@ -276,7 +276,13 @@ class _InstallProgress extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final percent = (snapshot.progress * 100).round();
-    final downloading = snapshot.phase == RuntimePhase.downloading;
+    final stagePercent = snapshot.stageProgress == null
+        ? null
+        : (snapshot.stageProgress! * 100).round();
+    final hasStage = snapshot.stageProgress != null ||
+        (snapshot.stageDetail?.isNotEmpty ?? false);
+    final hasStageBytes = snapshot.stageTotalBytes > 0;
+    final hasItems = snapshot.totalItems > 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -301,26 +307,83 @@ class _InstallProgress extends StatelessWidget {
           minHeight: 9,
           borderRadius: BorderRadius.circular(99),
         ),
-        const SizedBox(height: 10),
-        if (downloading)
-          Wrap(
-            spacing: 12,
-            runSpacing: 4,
-            children: [
-              Text(
-                '${bytes(snapshot.downloadedBytes)} / '
-                '${bytes(snapshot.totalBytes)}',
-              ),
-              if (snapshot.speedBytesPerSecond > 0)
-                Text('${bytes(snapshot.speedBytesPerSecond)}/s'),
-            ],
-          )
-        else
-          Text(
-            'Overall installation progress',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
         const SizedBox(height: 8),
+        Text(
+          'Overall installation progress',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        if (hasStage) ...[
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Current task',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    if (stagePercent != null)
+                      Text(
+                        '$stagePercent%',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                  ],
+                ),
+                if (snapshot.stageProgress != null) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: snapshot.stageProgress,
+                    minHeight: 6,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ],
+                if (snapshot.stageDetail case final detail?) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    detail,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+                if (hasStageBytes || hasItems) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 4,
+                    children: [
+                      if (hasStageBytes)
+                        Text(
+                          '${bytes(snapshot.stageDownloadedBytes)} / '
+                          '${bytes(snapshot.stageTotalBytes)}',
+                        ),
+                      if (snapshot.stageSpeedBytesPerSecond > 0)
+                        Text(
+                          '${bytes(snapshot.stageSpeedBytesPerSecond)}/s',
+                        ),
+                      if (hasItems)
+                        Text(
+                          '${snapshot.completedItems} / '
+                          '${snapshot.totalItems} items',
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 10),
         Wrap(
           spacing: 14,
           runSpacing: 4,
