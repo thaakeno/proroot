@@ -51,10 +51,10 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun status(): RuntimeStatus = RuntimeEvents.latest
 
     fun install() {
-        startForegroundHost()
         scope.launch {
             mutex.withLock {
                 if (session.isRunning()) return@withLock
+                startForegroundHost()
                 try {
                     installer.install(RuntimeEvents::publish)
                     RuntimeEvents.publish(
@@ -82,7 +82,6 @@ class RuntimeEngine private constructor(private val context: Context) {
     }
 
     fun start() {
-        startForegroundHost()
         scope.launch {
             mutex.withLock {
                 if (!paths.installMarker.isFile) {
@@ -90,6 +89,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                     return@withLock
                 }
                 if (session.isRunning()) return@withLock
+                startForegroundHost()
 
                 RuntimeEvents.publish(
                     RuntimeStatus(
