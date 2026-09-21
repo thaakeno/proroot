@@ -7,7 +7,7 @@ import java.io.File
 class RuntimeDiagnostics(
     private val context: Context,
     private val paths: RuntimePaths,
-    private val runner: ProrootRunner,
+    private val runner: GuestRunner,
     private val daemon: AnlandDaemon,
     private val systemServices: SystemServicesSession,
     private val session: DesktopSession,
