@@ -1,14 +1,57 @@
 import 'package:flutter/material.dart';
+
+import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({required this.controller, required this.onOpenDesktop, super.key});
+  const HomeScreen({
+    required this.controller,
+    required this.onOpenDesktop,
+    required this.onOpenSetup,
+    super.key,
+  });
+
   final RuntimeController controller;
   final VoidCallback onOpenDesktop;
+  final VoidCallback onOpenSetup;
+
+  bool _installing(RuntimeSnapshot snapshot) => {
+        RuntimePhase.downloading,
+        RuntimePhase.extracting,
+        RuntimePhase.provisioning,
+      }.contains(snapshot.phase);
+
+  String _bytes(int value) {
+    if (value <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var size = value.toDouble();
+    var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit++;
+    }
+    return '${size.toStringAsFixed(unit >= 2 ? 1 : 0)} ${units[unit]}';
+  }
+
+  String _eta(RuntimeSnapshot snapshot) {
+    if (snapshot.speedBytesPerSecond <= 0 ||
+        snapshot.totalBytes <= snapshot.downloadedBytes) {
+      return '';
+    }
+    final seconds =
+        ((snapshot.totalBytes - snapshot.downloadedBytes) /
+                snapshot.speedBytesPerSecond)
+            .ceil();
+    if (seconds < 60) return '~${seconds}s left';
+    final minutes = (seconds / 60).ceil();
+    if (minutes < 60) return '~${minutes}m left';
+    return '~${seconds ~/ 3600}h ${((seconds % 3600) / 60).ceil()}m left';
+  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
+    final installing = _installing(snapshot);
     final scheme = Theme.of(context).colorScheme;
 
     return CustomScrollView(
@@ -18,109 +61,199 @@ class HomeScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 120),
           sliver: SliverList.list(
             children: [
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [scheme.primaryContainer, scheme.tertiaryContainer],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            color: scheme.surface.withValues(alpha: .72),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(Icons.computer),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Debian 13 · KDE Plasma', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
-                              Text(snapshot.running ? 'Running · direct Adreno 840 graphics' : snapshot.message),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 28),
-                    Row(
-                      children: [
-                        _Metric(label: 'Display', value: '${controller.refreshRate} Hz'),
-                        const SizedBox(width: 12),
-                        const _Metric(label: 'GPU', value: 'Adreno 840'),
-                        const SizedBox(width: 12),
-                        const _Metric(label: 'Runtime', value: 'proroot'),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: controller.busy
-                                ? null
-                                : snapshot.running
-                                    ? onOpenDesktop
-                                    : snapshot.installed
-                                        ? () {
-                                            onOpenDesktop();
-                                            controller.start();
-                                          }
-                                        : controller.install,
-                            icon: Icon(snapshot.running ? Icons.fullscreen : snapshot.installed ? Icons.play_arrow_rounded : Icons.download_rounded),
-                            label: Text(snapshot.running ? 'Open desktop' : snapshot.installed ? 'Start Linux' : 'Install Linux'),
-                          ),
-                        ),
-                        if (snapshot.running) ...[
-                          const SizedBox(width: 12),
-                          IconButton.filledTonal(
-                            tooltip: 'Stop Linux',
-                            onPressed: controller.stop,
-                            icon: const Icon(Icons.stop_rounded),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 22),
-              Text('Quick launch', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 12),
-              _AppGrid(controller: controller, onOpenDesktop: onOpenDesktop),
-              const SizedBox(height: 22),
               Card(
+                clipBehavior: Clip.antiAlias,
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
+                  padding: const EdgeInsets.all(22),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.bolt_rounded, color: scheme.primary),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      Row(
+                        children: [
+                          Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color: scheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Icon(
+                              Icons.desktop_windows_rounded,
+                              color: scheme.onPrimaryContainer,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Debian 13',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.copyWith(fontWeight: FontWeight.w800),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  snapshot.running
+                                      ? 'KDE Plasma is running'
+                                      : snapshot.message,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          _StatusPill(snapshot: snapshot),
+                        ],
+                      ),
+                      if (installing) ...[
+                        const SizedBox(height: 24),
+                        _InstallProgress(
+                          snapshot: snapshot,
+                          bytes: _bytes,
+                          eta: _eta(snapshot),
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: onOpenSetup,
+                            icon: const Icon(Icons.downloading_rounded),
+                            label: const Text('View setup'),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Setup keeps running if you leave this screen.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ] else if (snapshot.phase == RuntimePhase.failed) ...[
+                        const SizedBox(height: 20),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: scheme.errorContainer,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Text(
+                            snapshot.detail?.split('\n').firstOrNull ??
+                                'The installation stopped. Open Setup or Diagnostics for the full error.',
+                            style: TextStyle(color: scheme.onErrorContainer),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
                           children: [
-                            const Text('Native ARM64 userspace', style: TextStyle(fontWeight: FontWeight.w800)),
-                            Text('No CPU emulation. Freedreno/Turnip talks directly to KGSL.', style: TextStyle(color: scheme.onSurfaceVariant)),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: controller.install,
+                                icon: const Icon(Icons.refresh_rounded),
+                                label: const Text('Retry install'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            OutlinedButton(
+                              onPressed: onOpenSetup,
+                              child: const Text('Setup'),
+                            ),
                           ],
                         ),
-                      ),
+                      ] else ...[
+                        const SizedBox(height: 22),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _InfoChip(
+                              icon: Icons.speed_rounded,
+                              label: '${controller.refreshRate} Hz',
+                            ),
+                            const _InfoChip(
+                              icon: Icons.memory_rounded,
+                              label: 'Adreno 840',
+                            ),
+                            const _InfoChip(
+                              icon: Icons.terminal_rounded,
+                              label: 'proroot',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: snapshot.running
+                                ? onOpenDesktop
+                                : snapshot.installed
+                                    ? () {
+                                        onOpenDesktop();
+                                        controller.start();
+                                      }
+                                    : controller.install,
+                            icon: Icon(
+                              snapshot.running
+                                  ? Icons.fullscreen_rounded
+                                  : snapshot.installed
+                                      ? Icons.play_arrow_rounded
+                                      : Icons.download_rounded,
+                            ),
+                            label: Text(
+                              snapshot.running
+                                  ? 'Open desktop'
+                                  : snapshot.installed
+                                      ? 'Start Linux'
+                                      : 'Install Linux',
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
               ),
+              if (snapshot.installed) ...[
+                const SizedBox(height: 26),
+                Text(
+                  'Quick launch',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 12),
+                _AppGrid(
+                  controller: controller,
+                  onOpenDesktop: onOpenDesktop,
+                ),
+              ] else if (!installing &&
+                  snapshot.phase != RuntimePhase.failed) ...[
+                const SizedBox(height: 18),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: scheme.primary,
+                        ),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Text(
+                            'The desktop and app launcher appear after setup finishes.',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -129,35 +262,159 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-class _Metric extends StatelessWidget {
-  const _Metric({required this.label, required this.value});
-  final String label;
-  final String value;
+class _InstallProgress extends StatelessWidget {
+  const _InstallProgress({
+    required this.snapshot,
+    required this.bytes,
+    required this.eta,
+  });
+
+  final RuntimeSnapshot snapshot;
+  final String Function(int) bytes;
+  final String eta;
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface.withValues(alpha: .62),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final percent = (snapshot.progress * 100).round();
+    final downloading = snapshot.phase == RuntimePhase.downloading;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 2),
-            Text(label, style: Theme.of(context).textTheme.labelSmall),
+            Expanded(
+              child: Text(
+                snapshot.message,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            Text(
+              '$percent%',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
           ],
         ),
+        const SizedBox(height: 10),
+        LinearProgressIndicator(
+          value: snapshot.progress > 0 ? snapshot.progress : null,
+          minHeight: 9,
+          borderRadius: BorderRadius.circular(99),
+        ),
+        const SizedBox(height: 10),
+        if (downloading)
+          Wrap(
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Text(
+                '${bytes(snapshot.downloadedBytes)} / '
+                '${bytes(snapshot.totalBytes)}',
+              ),
+              if (snapshot.speedBytesPerSecond > 0)
+                Text('${bytes(snapshot.speedBytesPerSecond)}/s'),
+              if (eta.isNotEmpty) Text(eta),
+            ],
+          )
+        else
+          Text(
+            'Overall installation progress',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+      ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.snapshot});
+
+  final RuntimeSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (label, icon, background, foreground) = switch (snapshot.phase) {
+      RuntimePhase.running => (
+          'Running',
+          Icons.circle,
+          scheme.primaryContainer,
+          scheme.onPrimaryContainer,
+        ),
+      RuntimePhase.downloading ||
+      RuntimePhase.extracting ||
+      RuntimePhase.provisioning => (
+          'Installing',
+          Icons.downloading_rounded,
+          scheme.secondaryContainer,
+          scheme.onSecondaryContainer,
+        ),
+      RuntimePhase.failed => (
+          'Failed',
+          Icons.error_outline_rounded,
+          scheme.errorContainer,
+          scheme.onErrorContainer,
+        ),
+      RuntimePhase.ready => (
+          'Ready',
+          Icons.check_circle_outline_rounded,
+          scheme.primaryContainer,
+          scheme.onPrimaryContainer,
+        ),
+      _ => (
+          'Not installed',
+          Icons.circle_outlined,
+          scheme.surfaceContainerHighest,
+          scheme.onSurfaceVariant,
+        ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: foreground),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: foreground,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      avatar: Icon(icon, size: 17),
+      label: Text(label),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
 class _AppGrid extends StatelessWidget {
-  const _AppGrid({required this.controller, required this.onOpenDesktop});
+  const _AppGrid({
+    required this.controller,
+    required this.onOpenDesktop,
+  });
 
   final RuntimeController controller;
   final VoidCallback onOpenDesktop;
@@ -179,36 +436,41 @@ class _AppGrid extends StatelessWidget {
       itemCount: apps.length,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        childAspectRatio: 1.22,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
+        childAspectRatio: 1.12,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
       ),
       itemBuilder: (context, index) {
         final item = apps[index];
         return Card(
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: controller.snapshot.installed
-                ? () async {
-                    onOpenDesktop();
-                    try {
-                      await controller.launchApp(item.$3);
-                    } catch (error) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Could not launch ${item.$2}: $error')),
-                      );
-                    }
-                  }
-                : null,
+            onTap: () async {
+              onOpenDesktop();
+              try {
+                await controller.launchApp(item.$3);
+              } catch (error) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Could not launch ${item.$2}: $error'),
+                  ),
+                );
+              }
+            },
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(15),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Icon(item.$1),
-                  Text(item.$2, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  Icon(item.$1, size: 27),
+                  Text(
+                    item.$2,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
                 ],
               ),
             ),
