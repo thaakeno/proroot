@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/state/runtime_controller.dart';
+import 'native_desktop_view.dart';
 
 class DesktopScreen extends StatefulWidget {
   const DesktopScreen({required this.controller, super.key});
@@ -28,10 +29,7 @@ class _DesktopScreenState extends State<DesktopScreen> {
         children: [
           if (running)
             const Positioned.fill(
-              child: AndroidView(
-                viewType: 'dev.thaakeno.proroot/display',
-                layoutDirection: TextDirection.ltr,
-              ),
+              child: NativeDesktopView(),
             )
           else
             Center(

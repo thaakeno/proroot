@@ -40,6 +40,9 @@
                 android:value="Runs the user's local Linux desktop environment" />
         </service>
 
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableHcpp"
+            android:value="true" />
         <meta-data android:name="flutterEmbedding" android:value="2" />
     </application>
 </manifest>
