@@ -293,7 +293,19 @@ class DesktopProvisioner(
                         ;;
                     aarch64)
                         work="$(mktemp -d)"
-                        fixed="${'
+                        fixed="${'$'}deb.fixed"
+                        dpkg-deb -R "${'$'}deb" "${'$'}work"
+                        sed -i 's/^Architecture:[[:space:]]*aarch64[[:space:]]*$/Architecture: arm64/' "${'$'}work/DEBIAN/control"
+                        dpkg-deb -b "${'$'}work" "${'$'}fixed" >/dev/null
+                        mv -f "${'$'}fixed" "${'$'}deb"
+                        rm -rf "${'$'}work"
+                        ;;
+                    *)
+                        printf 'Unsupported staged Debian package architecture: %s (%s)\\n' "${'$'}arch" "${'$'}deb" >&2
+                        exit 100
+                        ;;
+                esac
+            done
             """.trimIndent(),
         )
     }
