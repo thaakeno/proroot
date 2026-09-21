@@ -93,7 +93,9 @@ class RuntimeInstaller(
                 target.outputStream().use { output -> input.copyTo(output) }
             }
 
-            val executable = name.endsWith(".sh") ||
+            val executable = name.startsWith("start-") ||
+                name.startsWith("launch-") ||
+                name.startsWith("set-") ||
                 name.endsWith("-bridge.py")
             Os.chmod(
                 target.absolutePath,
