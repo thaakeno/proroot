@@ -52,7 +52,10 @@ class _ShellScreenState extends State<ShellScreen> {
     final controller = widget.controller;
     final pages = <Widget>[
       HomeScreen(controller: controller, onOpenDesktop: _openDesktop),
-      DesktopScreen(controller: controller),
+      DesktopScreen(
+        controller: controller,
+        onExitDesktop: () => _select(0),
+      ),
       AppsScreen(controller: controller, onOpenDesktop: _openDesktop),
       InstallScreen(controller: controller),
       SettingsScreen(controller: controller),
