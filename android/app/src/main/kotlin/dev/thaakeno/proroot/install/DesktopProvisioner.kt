@@ -43,7 +43,7 @@ class DesktopProvisioner(
 
             if getent group linux >/dev/null 2>&1; then
                 current_gid="$(getent group linux | cut -d: -f3)"
-                if [ "${'
+                if [ "${'$'}current_gid" != "$desktopUid" ]; then
                     groupmod -g $desktopUid linux
                 fi
             else
@@ -52,7 +52,7 @@ class DesktopProvisioner(
 
             if id linux >/dev/null 2>&1; then
                 current_uid="$(id -u linux)"
-                if [ "${'
+                if [ "${'$'}current_uid" != "$desktopUid" ]; then
                     usermod -u $desktopUid linux
                 fi
                 usermod -g linux -s /bin/bash linux
@@ -222,8 +222,8 @@ class DesktopProvisioner(
               libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 \
               mesa-libgallium mesa-vulkan-drivers
             do
-                if dpkg-query -W "${'
-                    apt-mark hold "${'
+                if dpkg-query -W "${'$'}package" >/dev/null 2>&1; then
+                    apt-mark hold "${'$'}package" >/dev/null
                 fi
             done
         """.trimIndent())
