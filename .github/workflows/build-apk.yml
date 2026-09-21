@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: package-architecture-fix
+# rebuild marker: staged-package-fix-and-progress
 
 on:
   push:
