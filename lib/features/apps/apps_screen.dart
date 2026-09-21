@@ -45,9 +45,9 @@ class _AppsScreenState extends State<AppsScreen> {
   }
 
   Future<void> _launch(LinuxApp app) async {
+    widget.onOpenDesktop();
     try {
       await widget.controller.launchApp(app.id);
-      widget.onOpenDesktop();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

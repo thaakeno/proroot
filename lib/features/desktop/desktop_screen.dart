@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
 import 'native_desktop_view.dart';
 
@@ -22,12 +23,13 @@ class _DesktopScreenState extends State<DesktopScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final running = widget.controller.snapshot.running;
+    final snapshot = widget.controller.snapshot;
+    final showSurface = snapshot.running || snapshot.phase == RuntimePhase.starting;
     return ColoredBox(
       color: Colors.black,
       child: Stack(
         children: [
-          if (running)
+          if (showSurface)
             const Positioned.fill(
               child: NativeDesktopView(),
             )

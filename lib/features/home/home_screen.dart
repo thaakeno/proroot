@@ -75,9 +75,9 @@ class HomeScreen extends StatelessWidget {
                                 : snapshot.running
                                     ? onOpenDesktop
                                     : snapshot.installed
-                                        ? () async {
-                                            await controller.start();
+                                        ? () {
                                             onOpenDesktop();
+                                            controller.start();
                                           }
                                         : controller.install,
                             icon: Icon(snapshot.running ? Icons.fullscreen : snapshot.installed ? Icons.play_arrow_rounded : Icons.download_rounded),
