@@ -176,6 +176,14 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     private fun startDesktopOnce(onStage: (String) -> Unit) {
         paths.resetTransientState()
+        listOf(
+            "desktop-session.log",
+            "system-services.log",
+            "proroot-crash.log",
+            "proroot-system-services.log",
+        ).forEach { name ->
+            File(paths.logsDir, name).delete()
+        }
         onStage("Starting display transport")
         daemon.start()
         onStage("Starting system services")

@@ -96,7 +96,7 @@ class InstallProotRunner(
         )
     }
 
-    override fun startRootService(shellCommand: String): Process =
+    override fun startSystemService(shellCommand: String): Process =
         unsupported()
 
     override fun startSession(shellCommand: String): Process =

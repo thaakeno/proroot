@@ -1,6 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+uid="$(id -u)"
+user="$(id -un)"
+printf 'system-services uid=%s user=%s\n' "$uid" "$user"
+if [[ "$uid" -eq 0 ]]; then
+    echo "system services must use the desktop user identity" >&2
+    exit 64
+fi
+
 mkdir -p /run/dbus /run/lock
 rm -f \
     /run/dbus/system_bus_socket \

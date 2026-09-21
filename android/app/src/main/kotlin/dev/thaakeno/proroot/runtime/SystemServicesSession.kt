@@ -25,7 +25,7 @@ class SystemServicesSession(
         login1Ready().delete()
         activationReady().delete()
 
-        val started = runner.startRootService(
+        val started = runner.startSystemService(
             "exec /usr/local/lib/proroot/start-system-services.sh",
         )
         process = started
@@ -49,7 +49,16 @@ class SystemServicesSession(
                 login1Ready().exists() &&
                 activationReady().exists() &&
                 started.isAlive
-            ) return
+            ) {
+                val busProbe = verifyBusFromDesktopIdentity()
+                if (busProbe.successful) return
+
+                stop()
+                error(
+                    "Linux system D-Bus was created but is not reachable from the desktop identity. " +
+                        busProbe.output.takeLast(2_000),
+                )
+            }
             if (!started.isAlive) break
             Thread.sleep(50)
         }
@@ -57,6 +66,26 @@ class SystemServicesSession(
         stop()
         error("Linux system D-Bus did not become ready")
     }
+
+    private fun verifyBusFromDesktopIdentity(): CommandResult =
+        runner.exec(
+            command = """
+                set -e
+                test "$(id -u)" != "0"
+                test -S /run/dbus/system_bus_socket
+                names="$(dbus-send \
+                  --system \
+                  --print-reply=literal \
+                  --dest=org.freedesktop.DBus \
+                  /org/freedesktop/DBus \
+                  org.freedesktop.DBus.ListNames)"
+                printf '%s\n' "$names"
+                grep -q 'org.freedesktop.UPower' <<<"$names"
+                grep -q 'org.freedesktop.login1' <<<"$names"
+            """.trimIndent(),
+            timeoutSeconds = 6,
+            fakeRoot = false,
+        )
 
     @Synchronized
     fun stop() {

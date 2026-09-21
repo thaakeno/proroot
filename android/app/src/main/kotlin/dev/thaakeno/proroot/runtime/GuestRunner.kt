@@ -24,7 +24,7 @@ interface GuestRunner {
         return result
     }
 
-    fun startRootService(shellCommand: String): Process
+    fun startSystemService(shellCommand: String): Process
 
     fun startSession(shellCommand: String): Process
 

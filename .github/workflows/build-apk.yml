@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: interrupted-dpkg-recovery-v3
+# rebuild marker: unified-desktop-identity-v4
 
 on:
   push:

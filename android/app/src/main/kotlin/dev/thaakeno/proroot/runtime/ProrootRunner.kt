@@ -125,11 +125,11 @@ class ProrootRunner(
         )
     }
 
-    override fun startRootService(shellCommand: String): Process =
+    override fun startSystemService(shellCommand: String): Process =
         command(
-            workingDirectory = "/root",
+            workingDirectory = "/home/linux",
             shellCommand = shellCommand,
-            fakeRoot = true,
+            fakeRoot = false,
             extraEnvironment = mapOf(
                 "PROROOT_LOG_APPEND" to
                     File(paths.logsDir, "proroot-system-services.log").absolutePath,
