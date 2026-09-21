@@ -1,5 +1,6 @@
 package dev.thaakeno.proroot.install
 
+import android.content.Context
 import android.system.Os
 import dev.thaakeno.proroot.runtime.ProrootRunner
 import dev.thaakeno.proroot.runtime.RuntimePaths
@@ -10,12 +11,13 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 class RuntimeInstaller(
+    private val context: Context,
     private val paths: RuntimePaths,
     runner: ProrootRunner,
 ) {
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
-    private val provisioner = DesktopProvisioner(runner)
+    private val provisioner = DesktopProvisioner(runner, android.os.Process.myUid())
 
     suspend fun install(onStatus: (RuntimeStatus) -> Unit) {
         paths.ensureHostDirectories()
@@ -27,6 +29,7 @@ class RuntimeInstaller(
         staging.deleteRecursively()
         check(staging.mkdirs()) { "Could not create staging rootfs" }
         extractor.extractTarXz(requireAsset(assets, RuntimeAssetKind.ROOTFS), staging)
+        installGuestScripts(staging)
 
         packageDir.mkdirs()
         stagePackage(requireAsset(assets, RuntimeAssetKind.ANLAND_GUEST), File(packageDir, "anland/anland.deb"))
@@ -46,8 +49,23 @@ class RuntimeInstaller(
         onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.98, "Activating verified Linux environment"))
         activate(staging)
         paths.installMarker.writeText(
-            "runtime=1\ndevice=${android.os.Build.DEVICE}\nabi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n"
+            "runtime=1\ndevice=${android.os.Build.DEVICE}\nuid=${android.os.Process.myUid()}\nabi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n"
         )
+    }
+
+    private fun installGuestScripts(rootfs: File) {
+        val targetDir = File(rootfs, "usr/local/lib/proroot")
+        targetDir.mkdirs()
+        val scripts = context.assets.list("guest")?.toList().orEmpty()
+        check(scripts.isNotEmpty()) { "Guest runtime scripts are missing from APK assets" }
+
+        scripts.forEach { name ->
+            val target = File(targetDir, name)
+            context.assets.open("guest/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            Os.chmod(target.absolutePath, 0x1ED)
+        }
     }
 
     private fun installBrave(rootfs: File, archive: File) {

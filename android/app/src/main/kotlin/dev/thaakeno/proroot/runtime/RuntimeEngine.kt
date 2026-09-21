@@ -28,7 +28,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val runner = ProrootRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
     private val session = DesktopSession(runner, paths)
-    private val installer = RuntimeInstaller(paths, runner)
+    private val installer = RuntimeInstaller(context, paths, runner)
 
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
@@ -94,6 +94,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                         installed = true,
                     ),
                 )
+
                 try {
                     paths.resetTransientState()
                     daemon.start()
@@ -109,6 +110,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                             )
                         }
                     }
+
                     RuntimeEvents.publish(
                         RuntimeStatus(
                             phase = RuntimePhase.running,
@@ -182,17 +184,9 @@ class RuntimeEngine private constructor(private val context: Context) {
         scope.launch {
             val appId = desktopId.removeSuffix(".desktop")
             runner.exec(
-                """
-                export HOME=/home/linux
-                export XDG_RUNTIME_DIR=/run/user/1000
-                session_env=/run/user/1000/proroot-session.env
-                test -r "$session_env" && . "$session_env"
-                socket="$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' 2>/dev/null | head -n1)"
-                test -n "$socket" || exit 72
-                export WAYLAND_DISPLAY="${socket##*/}"
-                exec runuser -u linux -- env                     HOME=/home/linux                     XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR"                     DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"                     WAYLAND_DISPLAY="$WAYLAND_DISPLAY"                     XDG_CURRENT_DESKTOP=KDE                     XDG_SESSION_TYPE=wayland                     gtk-launch $appId
-                """.trimIndent(),
+                command = "/usr/local/lib/proroot/launch-desktop-app.sh '$appId'",
                 timeoutSeconds = 30,
+                fakeRoot = false,
             )
         }
     }
@@ -221,6 +215,7 @@ class RuntimeEngine private constructor(private val context: Context) {
             "anlandSocket" to paths.anlandSocket.absolutePath,
             "anlandDaemon" to daemon.isRunning(),
             "desktopProcess" to session.isRunning(),
+            "desktopUid" to android.os.Process.myUid(),
             "performanceProfile" to performanceProfile,
             "logs" to logFiles,
         )

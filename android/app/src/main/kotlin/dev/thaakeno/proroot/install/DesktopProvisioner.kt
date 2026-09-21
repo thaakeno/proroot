@@ -3,21 +3,27 @@ package dev.thaakeno.proroot.install
 import dev.thaakeno.proroot.runtime.ProrootRunner
 import java.io.File
 
-class DesktopProvisioner(private val runner: ProrootRunner) {
+class DesktopProvisioner(
+    private val runner: ProrootRunner,
+    private val desktopUid: Int,
+) {
     fun provisionBase(rootfs: File) {
         prepareConfiguration(rootfs)
         runChecked(rootfs, "apt-get update")
         runChecked(rootfs, """
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends               ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux               dbus dbus-x11 dbus-user-session policykit-1 packagekit               kde-plasma-desktop plasma-workspace plasma-discover systemsettings               breeze breeze-icon-theme kde-config-gtk-style kio-extras               konsole dolphin kate ark okular spectacle               xwayland libgtk-3-bin xdg-utils               pipewire pipewire-pulse wireplumber               fonts-noto fonts-noto-cjk fonts-noto-color-emoji               firefox-esr mesa-utils vulkan-tools glmark2               git openssh-client rsync file procps iproute2 net-tools               htop nano vim less unzip xz-utils
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends               ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux               dbus dbus-x11 dbus-user-session policykit-1 packagekit               kde-plasma-desktop plasma-workspace plasma-discover systemsettings               breeze breeze-icon-theme kde-config-gtk-style kio-extras               konsole dolphin kate ark okular spectacle gwenview kcalc               xwayland libgtk-3-bin xdg-utils               pipewire pipewire-pulse wireplumber               fonts-noto fonts-noto-cjk fonts-noto-color-emoji               firefox-esr mesa-utils vulkan-tools glmark2               libreoffice gimp vlc               build-essential cmake pkg-config python3 python3-pip nodejs npm               git openssh-client rsync file procps iproute2 net-tools jq ripgrep fd-find               htop nano vim less unzip xz-utils
         """.trimIndent())
 
         runChecked(rootfs, """
-            id -u linux >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/bash linux
-            install -d -m 0700 -o 1000 -g 1000 /run/user/1000
-            install -d -m 1777 /tmp/.X11-unix
-            printf 'linux ALL=(ALL) NOPASSWD: ALL
-' >/etc/sudoers.d/90-linux
-            chmod 0440 /etc/sudoers.d/90-linux
+            if id linux >/dev/null 2>&1; then
+                usermod -u $desktopUid linux || true
+            else
+                useradd -m -u $desktopUid -s /bin/bash linux
+            fi
+            getent group linux >/dev/null 2>&1 || groupadd -g $desktopUid linux || true
+            install -d -m 0755 /home/linux
+            chown -R linux:linux /home/linux || true
+            install -d -m 1777 /tmp /dev/shm
             dbus-uuidgen --ensure=/etc/machine-id
             rm -f /var/lib/dbus/machine-id
             ln -s /etc/machine-id /var/lib/dbus/machine-id
@@ -39,6 +45,7 @@ class DesktopProvisioner(private val runner: ProrootRunner) {
             test -x /usr/bin/firefox-esr
             test -x /usr/bin/code
             test -x /usr/local/bin/brave-browser
+            test -x /usr/local/lib/proroot/start-desktop.sh
             test -c /dev/kgsl-3d0
             MESA_LOADER_DRIVER_OVERRIDE=kgsl TURNIP_KMD=kgsl GALLIUM_DRIVER=freedreno               vulkaninfo --summary 2>&1 | tee /tmp/proroot-vulkan-summary.txt
             grep -Eiq 'Adreno|turnip' /tmp/proroot-vulkan-summary.txt
@@ -88,8 +95,7 @@ class DesktopProvisioner(private val runner: ProrootRunner) {
         runChecked(rootfs, """
             locale-gen en_US.UTF-8
             update-locale LANG=en_US.UTF-8
-            install -d -m 0755 /home/linux/.config
-            chown -R linux:linux /home/linux
+            chown -R linux:linux /home/linux || true
             cat >/usr/local/bin/proroot-gpu-info <<'EOF'
             #!/bin/sh
             set -eu

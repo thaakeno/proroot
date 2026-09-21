@@ -19,12 +19,15 @@ class ProrootRunner(
         rootfs: File = paths.rootfs,
         workingDirectory: String = "/home/linux",
         shellCommand: String,
+        fakeRoot: Boolean = true,
         extraEnvironment: Map<String, String> = emptyMap(),
     ): ProcessBuilder {
         val args = mutableListOf(
             launcher.absolutePath,
             "-r", rootfs.absolutePath,
-            "-0",
+        )
+        if (fakeRoot) args += "-0"
+        args += listOf(
             "--link2symlink",
             "-w", workingDirectory,
             "-b", "/dev:/dev",
@@ -48,8 +51,15 @@ class ProrootRunner(
         command: String,
         timeoutSeconds: Long = 120,
         rootfs: File = paths.rootfs,
+        fakeRoot: Boolean = true,
     ): CommandResult {
-        val process = command(rootfs = rootfs, workingDirectory = "/root", shellCommand = command).start()
+        val process = command(
+            rootfs = rootfs,
+            workingDirectory = if (fakeRoot) "/root" else "/home/linux",
+            shellCommand = command,
+            fakeRoot = fakeRoot,
+        ).start()
+
         val output = StringBuilder()
         val reader = Thread {
             process.inputStream.bufferedReader().useLines { lines ->
@@ -63,21 +73,22 @@ class ProrootRunner(
             if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
         }
         reader.join(2_000)
+
         return CommandResult(
             exitCode = if (completed) process.exitValue() else 124,
             output = output.toString(),
         )
     }
 
-    fun startSession(shellCommand: String): Process {
-        return command(
+    fun startSession(shellCommand: String): Process =
+        command(
             workingDirectory = "/home/linux",
             shellCommand = shellCommand,
+            fakeRoot = false,
             extraEnvironment = mapOf(
                 "PROROOT_LOG_APPEND" to File(paths.logsDir, "proroot-crash.log").absolutePath,
             ),
         ).start()
-    }
 
     private fun hostEnvironment(extra: Map<String, String>): MutableMap<String, String> {
         val env = mutableMapOf(
