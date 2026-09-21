@@ -71,47 +71,7 @@ class SystemServicesSession(
         runner.exec(
             command = """
                 set -e
-                id -u | grep -vq '^0
-            """.trimIndent(),
-            timeoutSeconds = 6,
-            fakeRoot = false,
-        )
-
-    @Synchronized
-    fun stop() {
-        val active = process
-        if (active != null) {
-            active.destroy()
-            if (!active.waitFor(2, TimeUnit.SECONDS)) active.destroyForcibly()
-        }
-        process = null
-        logThread?.join(500)
-        logThread = null
-        systemBusSocket().delete()
-        upowerReady().delete()
-        login1Ready().delete()
-        activationReady().delete()
-        File(paths.rootfs, "run/dbus/pid").delete()
-    }
-
-    fun isRunning(): Boolean =
-        process?.isAlive == true &&
-            systemBusSocket().exists() &&
-            upowerReady().exists() &&
-            login1Ready().exists() &&
-            activationReady().exists()
-
-    private fun upowerReady(): File = File(paths.rootfs, "run/proroot-upower.ready")
-
-    private fun login1Ready(): File = File(paths.rootfs, "run/proroot-login1.ready")
-
-    private fun activationReady(): File =
-        File(paths.rootfs, "run/proroot-system-activation.ready")
-
-    private fun systemBusSocket(): File =
-        File(paths.rootfs, "run/dbus/system_bus_socket")
-}
-
+                id -u | grep -vq '^0$'
                 test -S /run/dbus/system_bus_socket
                 dbus-send \
                   --system \
@@ -119,7 +79,8 @@ class SystemServicesSession(
                   --dest=org.freedesktop.DBus \
                   /org/freedesktop/DBus \
                   org.freedesktop.DBus.ListNames \
-                  | tee /tmp/proroot-system-bus-names.txt
+                  > /tmp/proroot-system-bus-names.txt
+                cat /tmp/proroot-system-bus-names.txt
                 grep -q 'org.freedesktop.UPower' /tmp/proroot-system-bus-names.txt
                 grep -q 'org.freedesktop.login1' /tmp/proroot-system-bus-names.txt
             """.trimIndent(),
