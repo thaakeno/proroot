@@ -3,7 +3,8 @@ package dev.thaakeno.proroot.install
 import android.content.Context
 import android.os.StatFs
 import android.system.Os
-import dev.thaakeno.proroot.runtime.ProrootRunner
+import dev.thaakeno.proroot.runtime.GuestRunner
+import dev.thaakeno.proroot.runtime.RuntimeRunnerRouter
 import dev.thaakeno.proroot.runtime.RuntimePaths
 import dev.thaakeno.proroot.runtime.RuntimePhase
 import dev.thaakeno.proroot.runtime.RuntimeStatus
@@ -12,7 +13,8 @@ import java.io.File
 class RuntimeInstaller(
     private val context: Context,
     private val paths: RuntimePaths,
-    runner: ProrootRunner,
+    installRunner: GuestRunner,
+    private val runtimeRouter: RuntimeRunnerRouter,
 ) {
     companion object {
         private const val INTERNAL_READY_MARKER = ".proroot-runtime-ready"
@@ -21,7 +23,7 @@ class RuntimeInstaller(
     private val downloads = DownloadCoordinator(paths.cacheDir)
     private val journal = InstallJournal(paths)
     private val provisioner = DesktopProvisioner(
-        runner = runner,
+        runner = installRunner,
         desktopUid = android.os.Process.myUid(),
         journal = journal,
     )
@@ -107,6 +109,7 @@ class RuntimeInstaller(
             ),
         )
         provisioner.finalizeGraphicsAndVerify(staging)
+        runtimeRouter.selectFor(staging)
         File(staging, INTERNAL_READY_MARKER).writeText(markerContents("verified"))
 
         emit(
