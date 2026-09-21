@@ -6,6 +6,7 @@ import java.io.File
 class DesktopProvisioner(
     private val runner: ProrootRunner,
     private val desktopUid: Int,
+    private val journal: InstallJournal,
 ) {
     private val rootlessServices = RootlessDesktopServicesConfigurator()
 
@@ -230,8 +231,9 @@ class DesktopProvisioner(
             rootfs = rootfs,
             fakeRoot = fakeRoot,
         )
+        journal.command(command, result)
         check(result.successful) {
-            "Provisioning failed (exit ${result.exitCode}):\n${result.output.takeLast(12_000)}"
+            "Provisioning failed (exit ${result.exitCode}). Full output is in install.log."
         }
     }
 }
