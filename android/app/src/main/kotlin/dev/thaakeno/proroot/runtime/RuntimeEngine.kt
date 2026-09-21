@@ -154,7 +154,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                     ),
                 )
 
-                var firstFailure = runCatching {
+                val failure = runCatching {
                     installer.prepareInstalledRuntime()
                     RuntimeEvents.publish(
                         RuntimeStatus(
@@ -165,7 +165,8 @@ class RuntimeEngine private constructor(private val context: Context) {
                     )
                     startDesktopOnce()
                 }.exceptionOrNull()
-                if (firstFailure == null) {
+
+                if (failure == null) {
                     publishRunning("KDE Plasma is running")
                     return@withLock
                 }
@@ -173,36 +174,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 session.stop()
                 systemServices.stop()
                 daemon.stop()
-
-                if (installer.canRollback()) {
-                    RuntimeEvents.publish(
-                        RuntimeStatus(
-                            phase = RuntimePhase.starting,
-                            message = "Recovering previous Linux environment",
-                            detail = firstFailure.message,
-                            installed = true,
-                        ),
-                    )
-
-                    val recoveryFailure = runCatching {
-                        installer.rollback()
-                        paths.resetTransientState()
-                        startDesktopOnce()
-                    }.exceptionOrNull()
-
-                    if (recoveryFailure == null) {
-                        publishRunning("Recovered previous Linux environment")
-                        return@withLock
-                    }
-
-                    session.stop()
-                    systemServices.stop()
-                    daemon.stop()
-                    publishStartFailure(recoveryFailure, firstFailure)
-                    return@withLock
-                }
-
-                publishStartFailure(firstFailure)
+                publishStartFailure(failure)
             }
         }
     }
