@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: 2026-09-21T14:50+02:00
+# rebuild marker: proroot-only-dsha-style
 
 on:
   push:
