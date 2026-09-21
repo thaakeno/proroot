@@ -330,8 +330,10 @@ class DesktopProvisioner(
                 Acquire::Retries "4";
                 Acquire::http::Pipeline-Depth "10";
                 Acquire::https::Pipeline-Depth "10";
+                Acquire::Languages "none";
                 Dpkg::Use-Pty "0";
                 APT::Install-Recommends "0";
+                APT::Install-Suggests "0";
                 """.trimIndent() + "\n",
             )
         }
