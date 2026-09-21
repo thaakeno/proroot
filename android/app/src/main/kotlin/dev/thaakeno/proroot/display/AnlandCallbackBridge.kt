@@ -9,7 +9,8 @@ import java.nio.charset.StandardCharsets
 
 @Keep
 class AnlandCallbackBridge(context: Context) {
-    private val clipboard = context.getSystemService(ClipboardManager::class.java)
+    private val appContext = context.applicationContext
+    private val clipboard = appContext.getSystemService(ClipboardManager::class.java)
     private var listening = false
     private var nativeUpdate: String? = null
 
@@ -17,7 +18,7 @@ class AnlandCallbackBridge(context: Context) {
         if (!listening) return@OnPrimaryClipChangedListener
         val text = clipboard.primaryClip
             ?.getItemAt(0)
-            ?.coerceToText(context)
+            ?.coerceToText(appContext)
             ?.toString()
             ?: return@OnPrimaryClipChangedListener
 
@@ -46,7 +47,7 @@ class AnlandCallbackBridge(context: Context) {
     fun nativeClipboardSync() {
         val text = clipboard.primaryClip
             ?.getItemAt(0)
-            ?.coerceToText(context)
+            ?.coerceToText(appContext)
             ?.toString()
             ?: return
         Native.nativeSendClipboard(text.toByteArray(StandardCharsets.UTF_8))

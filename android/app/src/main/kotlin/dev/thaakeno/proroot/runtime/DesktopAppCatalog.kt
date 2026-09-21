@@ -35,9 +35,9 @@ class DesktopAppCatalog(private val paths: RuntimePaths) {
         )
 
         val seen = linkedMapOf<String, DesktopApp>()
-        roots.filter(File::isDirectory).forEach { root ->
+        roots.filter { it.isDirectory }.forEach { root ->
             root.listFiles { file -> file.isFile && file.extension == "desktop" }
-                ?.sortedBy(File::name)
+                ?.sortedBy { it.name }
                 ?.forEach { file ->
                     parse(file, icons)?.let { seen[it.id] = it }
                 }
@@ -104,7 +104,7 @@ class DesktopAppCatalog(private val paths: RuntimePaths) {
         if (icon.isNullOrBlank()) return null
 
         if (icon.startsWith('/')) {
-            return File(paths.rootfs, icon.removePrefix("/")).takeIf(File::isFile)
+            return File(paths.rootfs, icon.removePrefix("/")).takeIf { it.isFile }
         }
 
         val exact = icons[icon]
@@ -127,7 +127,7 @@ class DesktopAppCatalog(private val paths: RuntimePaths) {
             File(paths.rootfs, "usr/share/pixmaps"),
         )
 
-        roots.filter(File::isDirectory).forEach { root ->
+        roots.filter { it.isDirectory }.forEach { root ->
             root.walkTopDown()
                 .maxDepth(7)
                 .filter { file ->
