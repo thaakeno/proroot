@@ -1,6 +1,7 @@
 package dev.thaakeno.proroot.runtime
 
 import android.content.Context
+import android.system.Os
 import java.io.File
 
 class RuntimePaths(context: Context) {
@@ -16,6 +17,7 @@ class RuntimePaths(context: Context) {
     val anlandDir = File(files, "anland")
     val anlandSocket = File(anlandDir, "display_daemon.sock")
     val sharedDir = File(files, "shared")
+    val shmDir = File(files, "runtime-shm")
 
     val procCompatDir = File(files, "proc-compat")
     val procStat = File(procCompatDir, "stat")
@@ -41,16 +43,21 @@ class RuntimePaths(context: Context) {
             logsDir,
             anlandDir,
             sharedDir,
+            shmDir,
             procCompatDir,
             procPciDevices.parentFile,
         ).filterNotNull().forEach {
             if (!it.exists()) check(it.mkdirs()) { "Could not create " + it.absolutePath }
         }
+        runCatching { Os.chmod(shmDir.absolutePath, 0x3FF) }
     }
 
     fun resetTransientState() {
         anlandSocket.delete()
         tmpDir.deleteRecursively()
         check(tmpDir.mkdirs() || tmpDir.isDirectory) { "Could not recreate runtime tmp" }
+        shmDir.deleteRecursively()
+        check(shmDir.mkdirs() || shmDir.isDirectory) { "Could not recreate runtime shared memory" }
+        runCatching { Os.chmod(shmDir.absolutePath, 0x3FF) }
     }
 }
