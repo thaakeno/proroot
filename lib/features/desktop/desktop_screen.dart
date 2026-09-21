@@ -59,70 +59,75 @@ class _DesktopScreenState extends State<DesktopScreen> {
             ),
           if (_controlsVisible)
             Positioned(
-              top: 12,
-              left: 12,
+              top: 10,
               right: 12,
               child: SafeArea(
-                child: Center(
-                  child: Container(
-                    constraints: const BoxConstraints(maxWidth: 720),
-                    padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xE814171D),
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: Colors.white12),
-                      boxShadow: const [
-                        BoxShadow(blurRadius: 28, offset: Offset(0, 10), color: Color(0x55000000)),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.circle, size: 10, color: Color(0xFF6EE7A6)),
-                        const SizedBox(width: 9),
-                        const Expanded(
-                          child: Text(
-                            'Debian 13 · Plasma',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-                          ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xE814171D),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.white12),
+                    boxShadow: const [
+                      BoxShadow(
+                        blurRadius: 24,
+                        offset: Offset(0, 8),
+                        color: Color(0x44000000),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 8),
+                        child: Icon(
+                          Icons.circle,
+                          size: 9,
+                          color: Color(0xFF6EE7A6),
                         ),
-                        IconButton(
-                          tooltip: 'Keyboard',
-                          onPressed: widget.controller.showKeyboard,
-                          color: Colors.white,
-                          icon: const Icon(Icons.keyboard_rounded),
+                      ),
+                      IconButton(
+                        tooltip: 'Keyboard',
+                        onPressed: widget.controller.showKeyboard,
+                        color: Colors.white,
+                        icon: const Icon(Icons.keyboard_rounded),
+                      ),
+                      IconButton(
+                        tooltip: _pointerCaptured
+                            ? 'Release mouse'
+                            : 'Capture mouse',
+                        onPressed: _togglePointerCapture,
+                        color: _pointerCaptured
+                            ? const Color(0xFF8DDBFF)
+                            : Colors.white,
+                        icon: Icon(
+                          _pointerCaptured
+                              ? Icons.mouse_rounded
+                              : Icons.mouse_outlined,
                         ),
-                        IconButton(
-                          tooltip: _pointerCaptured ? 'Release mouse' : 'Capture mouse',
-                          onPressed: _togglePointerCapture,
-                          color: _pointerCaptured ? const Color(0xFF8DDBFF) : Colors.white,
-                          icon: Icon(_pointerCaptured ? Icons.mouse_rounded : Icons.mouse_outlined),
-                        ),
-                        IconButton(onPressed: () => _launch('org.kde.konsole.desktop'), color: Colors.white, icon: const Icon(Icons.terminal_rounded)),
-                        IconButton(onPressed: () => _launch('brave-browser.desktop'), color: Colors.white, icon: const Icon(Icons.language_rounded)),
-                        IconButton(
-                          tooltip: 'Leave desktop',
-                          onPressed: widget.onExitDesktop,
-                          color: Colors.white,
-                          icon: const Icon(Icons.close_fullscreen_rounded),
-                        ),
-                        IconButton(
-                          tooltip: 'Hide controls',
-                          onPressed: () => setState(() => _controlsVisible = false),
-                          color: Colors.white,
-                          icon: const Icon(Icons.keyboard_arrow_up_rounded),
-                        ),
-                        IconButton(onPressed: widget.controller.stop, color: Colors.white, icon: const Icon(Icons.stop_rounded)),
-                      ],
-                    ),
+                      ),
+                      IconButton(
+                        tooltip: 'Stop Linux',
+                        onPressed: widget.controller.stop,
+                        color: Colors.white,
+                        icon: const Icon(Icons.stop_rounded),
+                      ),
+                      IconButton(
+                        tooltip: 'Hide desktop controls',
+                        onPressed: () =>
+                            setState(() => _controlsVisible = false),
+                        color: Colors.white,
+                        icon: const Icon(Icons.keyboard_arrow_up_rounded),
+                      ),
+                    ],
                   ),
                 ),
               ),
             )
           else
             Positioned(
-              top: 12,
+              top: 10,
               right: 12,
               child: SafeArea(
                 child: IconButton.filled(
