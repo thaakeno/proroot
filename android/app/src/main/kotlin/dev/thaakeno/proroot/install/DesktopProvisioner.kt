@@ -188,16 +188,19 @@ class DesktopProvisioner(
     }
 
     private fun protectGraphicsStack(rootfs: File) {
-        File(rootfs, "etc/apt/preferences.d/hold-proroot-graphics").apply {
-            parentFile?.mkdirs()
-            writeText(
-                """
-                Package: xwayland kwin-common kwin-data kwin-wayland libkwin6 libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 mesa-libgallium mesa-vulkan-drivers
-                Pin: origin *
-                Pin-Priority: -1
-                """.trimIndent() + "\n",
-            )
-        }
+        File(rootfs, "etc/apt/preferences.d/hold-proroot-graphics").delete()
+        runChecked(rootfs, """
+            set -e
+            for package in \
+              xwayland kwin-common kwin-data kwin-wayland libkwin6 \
+              libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 \
+              mesa-libgallium mesa-vulkan-drivers
+            do
+                if dpkg-query -W "$package" >/dev/null 2>&1; then
+                    apt-mark hold "$package" >/dev/null
+                fi
+            done
+        """.trimIndent())
     }
 
     private fun runChecked(rootfs: File, command: String, fakeRoot: Boolean = true) {
