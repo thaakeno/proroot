@@ -19,20 +19,33 @@ class RuntimeInstaller(
     }
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
-    private val provisioner = DesktopProvisioner(runner, android.os.Process.myUid())
+    private val journal = InstallJournal(paths)
+    private val provisioner = DesktopProvisioner(
+        runner = runner,
+        desktopUid = android.os.Process.myUid(),
+        journal = journal,
+    )
 
     suspend fun install(onStatus: (RuntimeStatus) -> Unit) {
         paths.ensureHostDirectories()
         recoverInterruptedActivation()
-        ensureFreeSpace()
-        val totalDownloadBytes = AssetCatalog.all.sumOf { it.size }
-        val assets = downloads.downloadAll(AssetCatalog.all) { status ->
-            onStatus(status.copy(progress = status.progress * 0.40))
+        journal.begin()
+
+        fun emit(status: RuntimeStatus) {
+            journal.status(status)
+            onStatus(status)
         }
+
+        try {
+            ensureFreeSpace()
+            val totalDownloadBytes = AssetCatalog.all.sumOf { it.size }
+            val assets = downloads.downloadAll(AssetCatalog.all) { status ->
+                emit(status.copy(progress = status.progress * 0.40))
+            }
         val staging = paths.rootfsStaging
         val packageDir = File(staging, "opt/proroot-packages")
 
-        onStatus(
+        emit(
             installStatus(
                 phase = RuntimePhase.extracting,
                 progress = 0.42,
@@ -45,7 +58,7 @@ class RuntimeInstaller(
         extractor.extractTarXz(requireAsset(assets, RuntimeAssetKind.ROOTFS), staging)
         installGuestScripts(staging)
 
-        onStatus(
+        emit(
             installStatus(
                 phase = RuntimePhase.extracting,
                 progress = 0.44,
@@ -60,7 +73,7 @@ class RuntimeInstaller(
         extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
         provisioner.provisionBase(staging) { stage ->
-            onStatus(
+            emit(
                 installStatus(
                     phase = RuntimePhase.provisioning,
                     progress = stage.progress,
@@ -70,7 +83,7 @@ class RuntimeInstaller(
             )
         }
 
-        onStatus(
+        emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
                 progress = 0.89,
@@ -80,7 +93,7 @@ class RuntimeInstaller(
         )
         extractor.extractTarGz(requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY), staging)
 
-        onStatus(
+        emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
                 progress = 0.94,
@@ -91,7 +104,7 @@ class RuntimeInstaller(
         provisioner.finalizeGraphicsAndVerify(staging)
         File(staging, INTERNAL_READY_MARKER).writeText(markerContents("verified"))
 
-        onStatus(
+        emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
                 progress = 0.98,
@@ -101,6 +114,11 @@ class RuntimeInstaller(
         )
         activate(staging)
         paths.installMarker.writeText(markerContents("active"))
+        journal.success()
+        } catch (t: Throwable) {
+            journal.failure(t)
+            throw t
+        }
     }
 
     private fun ensureFreeSpace() {
@@ -131,6 +149,10 @@ class RuntimeInstaller(
             paths.installMarker.writeText(markerContents("recovered"))
         }
     }
+
+    fun lastFailure(): String? = journal.lastFailure()
+
+    fun wasInterrupted(): Boolean = journal.wasInterrupted()
 
     fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
 
