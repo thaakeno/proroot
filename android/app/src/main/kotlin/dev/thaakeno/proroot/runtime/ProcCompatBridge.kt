@@ -193,6 +193,7 @@ class ProcCompatBridge(
                 appendLine("soc_manufacturer=${Build.SOC_MANUFACTURER}")
             }
             appendLine("android_sdk=${Build.VERSION.SDK_INT}")
+            appendLine("android_uid=${Process.myUid()}")
             appendLine("cpu_count=$cpuCount")
             appendLine("memory_total_bytes=${mem.totalMem}")
             appendLine("memory_available_bytes=${mem.availMem}")
