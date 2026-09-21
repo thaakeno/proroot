@@ -17,18 +17,12 @@ while IFS= read -r -d "" deb; do
     aarch64)
       work="$(mktemp -d)"
       fixed="${deb}.fixed"
-      cleanup() {
-        rm -rf "$work"
-        rm -f "$fixed"
-      }
-      trap cleanup RETURN
 
       dpkg-deb -R "$deb" "$work"
       sed -i "s/^Architecture:[[:space:]]*aarch64[[:space:]]*$/Architecture: arm64/" "$work/DEBIAN/control"
       dpkg-deb -b "$work" "$fixed" >/dev/null
       mv -f "$fixed" "$deb"
       rm -rf "$work"
-      trap - RETURN
       ;;
     *)
       printf "Unsupported staged Debian package architecture: %s (%s)\n" "$arch" "$deb" >&2
