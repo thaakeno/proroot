@@ -3,7 +3,7 @@ package dev.thaakeno.proroot.runtime
 import java.io.File
 
 class DesktopAppLauncher(
-    private val runner: ProrootRunner,
+    private val runner: GuestRunner,
     private val paths: RuntimePaths,
 ) {
     fun launch(desktopId: String) {
