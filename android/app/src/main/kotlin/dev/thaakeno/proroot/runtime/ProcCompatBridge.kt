@@ -2,6 +2,9 @@ package dev.thaakeno.proroot.runtime
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
@@ -163,6 +166,23 @@ class ProcCompatBridge(
         // An empty valid table avoids leaking a host SELinux denial to Linux apps.
         writeAtomic(paths.procPciDevices, "")
 
+        val batteryIntent = appContext.registerReceiver(
+            null,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+        )
+        val batteryLevel = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val batteryScale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val batteryPercent = if (batteryLevel >= 0 && batteryScale > 0) {
+            ((batteryLevel.toDouble() / batteryScale) * 100.0).coerceIn(0.0, 100.0)
+        } else {
+            -1.0
+        }
+        val batteryStatus = batteryIntent?.getIntExtra(
+            BatteryManager.EXTRA_STATUS,
+            BatteryManager.BATTERY_STATUS_UNKNOWN,
+        ) ?: BatteryManager.BATTERY_STATUS_UNKNOWN
+        val batteryPlugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+
         val hostInfo = buildString {
             appendLine("model=${Build.MODEL}")
             appendLine("device=${Build.DEVICE}")
@@ -176,6 +196,9 @@ class ProcCompatBridge(
             appendLine("cpu_count=$cpuCount")
             appendLine("memory_total_bytes=${mem.totalMem}")
             appendLine("memory_available_bytes=${mem.availMem}")
+            appendLine("battery_percent=$batteryPercent")
+            appendLine("battery_status=$batteryStatus")
+            appendLine("battery_plugged=$batteryPlugged")
         }
         writeAtomic(paths.hostInfoFile, hostInfo)
     }
