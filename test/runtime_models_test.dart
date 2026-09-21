@@ -12,6 +12,8 @@ void main() {
         'downloadedBytes': 128,
         'totalBytes': 256,
         'speedBytesPerSecond': 64,
+        'elapsedSeconds': 12,
+        'etaSeconds': 34,
         'installed': true,
         'running': true,
         'detail': 'ok',
@@ -23,6 +25,8 @@ void main() {
       expect(snapshot.downloadedBytes, 128);
       expect(snapshot.totalBytes, 256);
       expect(snapshot.speedBytesPerSecond, 64);
+      expect(snapshot.elapsedSeconds, 12);
+      expect(snapshot.etaSeconds, 34);
       expect(snapshot.installed, isTrue);
       expect(snapshot.running, isTrue);
       expect(snapshot.detail, 'ok');
@@ -52,6 +56,8 @@ void main() {
         downloadedBytes: 1,
         totalBytes: 1,
         speedBytesPerSecond: 0,
+        elapsedSeconds: 5,
+        etaSeconds: 10,
         installed: true,
         running: false,
         detail: 'stable',
@@ -66,6 +72,8 @@ void main() {
       expect(changed.message, 'Starting');
       expect(changed.installed, isTrue);
       expect(changed.running, isFalse);
+      expect(changed.elapsedSeconds, 5);
+      expect(changed.etaSeconds, 10);
       expect(changed.detail, 'stable');
     });
   });
