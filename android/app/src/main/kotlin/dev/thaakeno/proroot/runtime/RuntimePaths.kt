@@ -17,6 +17,7 @@ class RuntimePaths(context: Context) {
     val anlandSocket = File(anlandDir, "display_daemon.sock")
     val sharedDir = File(files, "shared")
     val installMarker = File(machineDir, ".installed-v1")
+    val previousInstallMarker = File(machineDir, ".installed-v1.previous")
 
     fun ensureHostDirectories() {
         listOf(machineDir, cacheDir, tmpDir, logsDir, anlandDir, sharedDir).forEach {
@@ -27,6 +28,6 @@ class RuntimePaths(context: Context) {
     fun resetTransientState() {
         anlandSocket.delete()
         tmpDir.deleteRecursively()
-        tmpDir.mkdirs()
+        check(tmpDir.mkdirs() || tmpDir.isDirectory) { "Could not recreate runtime tmp" }
     }
 }

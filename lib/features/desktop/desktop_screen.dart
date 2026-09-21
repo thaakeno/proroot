@@ -51,28 +51,18 @@ class _DesktopScreenState extends State<DesktopScreen> {
                 ),
               ),
             ),
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () => setState(() => _controlsVisible = !_controlsVisible),
-              child: const SizedBox.expand(),
-            ),
-          ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            top: _controlsVisible ? 12 : -76,
-            left: 12,
-            right: 12,
-            child: IgnorePointer(
-              ignoring: !_controlsVisible,
+          if (_controlsVisible)
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
               child: SafeArea(
                 child: Center(
                   child: Container(
-                    constraints: const BoxConstraints(maxWidth: 680),
-                    padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xE614171D),
+                      color: const Color(0xE814171D),
                       borderRadius: BorderRadius.circular(22),
                       border: Border.all(color: Colors.white12),
                       boxShadow: const [
@@ -105,14 +95,31 @@ class _DesktopScreenState extends State<DesktopScreen> {
                         ),
                         IconButton(onPressed: () => _launch('org.kde.konsole.desktop'), color: Colors.white, icon: const Icon(Icons.terminal_rounded)),
                         IconButton(onPressed: () => _launch('brave-browser.desktop'), color: Colors.white, icon: const Icon(Icons.language_rounded)),
+                        IconButton(
+                          tooltip: 'Hide controls',
+                          onPressed: () => setState(() => _controlsVisible = false),
+                          color: Colors.white,
+                          icon: const Icon(Icons.keyboard_arrow_up_rounded),
+                        ),
                         IconButton(onPressed: widget.controller.stop, color: Colors.white, icon: const Icon(Icons.stop_rounded)),
                       ],
                     ),
                   ),
                 ),
               ),
+            )
+          else
+            Positioned(
+              top: 12,
+              right: 12,
+              child: SafeArea(
+                child: IconButton.filled(
+                  tooltip: 'Show desktop controls',
+                  onPressed: () => setState(() => _controlsVisible = true),
+                  icon: const Icon(Icons.tune_rounded),
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );

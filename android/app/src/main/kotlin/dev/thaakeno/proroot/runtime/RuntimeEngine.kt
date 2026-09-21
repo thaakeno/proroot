@@ -96,45 +96,92 @@ class RuntimeEngine private constructor(private val context: Context) {
                     ),
                 )
 
-                try {
-                    paths.resetTransientState()
-                    daemon.start()
-                    session.start(refreshRate, scale) { exitCode ->
-                        if (RuntimeEvents.latest.phase != RuntimePhase.stopping) {
-                            RuntimeEvents.publish(
-                                RuntimeStatus(
-                                    phase = RuntimePhase.failed,
-                                    message = "Linux desktop stopped",
-                                    detail = "Desktop process exited with code $exitCode. See diagnostics for full logs.",
-                                    installed = true,
-                                ),
-                            )
-                        }
+                val firstFailure = runCatching { startDesktopOnce() }.exceptionOrNull()
+                if (firstFailure == null) {
+                    publishRunning("KDE Plasma is running")
+                    return@withLock
+                }
+
+                session.stop()
+                daemon.stop()
+
+                if (installer.canRollback()) {
+                    RuntimeEvents.publish(
+                        RuntimeStatus(
+                            phase = RuntimePhase.starting,
+                            message = "Recovering previous Linux environment",
+                            detail = firstFailure.message,
+                            installed = true,
+                        ),
+                    )
+
+                    val recoveryFailure = runCatching {
+                        installer.rollback()
+                        paths.resetTransientState()
+                        startDesktopOnce()
+                    }.exceptionOrNull()
+
+                    if (recoveryFailure == null) {
+                        publishRunning("Recovered previous Linux environment")
+                        return@withLock
                     }
 
-                    RuntimeEvents.publish(
-                        RuntimeStatus(
-                            phase = RuntimePhase.running,
-                            progress = 1.0,
-                            message = "KDE Plasma is running",
-                            installed = true,
-                            running = true,
-                        ),
-                    )
-                } catch (t: Throwable) {
                     session.stop()
                     daemon.stop()
-                    RuntimeEvents.publish(
-                        RuntimeStatus(
-                            phase = RuntimePhase.failed,
-                            message = "Could not start Linux",
-                            detail = t.message,
-                            installed = true,
-                        ),
-                    )
+                    publishStartFailure(recoveryFailure, firstFailure)
+                    return@withLock
                 }
+
+                publishStartFailure(firstFailure)
             }
         }
+    }
+
+    private fun startDesktopOnce() {
+        paths.resetTransientState()
+        daemon.start()
+        session.start(refreshRate, scale) { exitCode ->
+            if (RuntimeEvents.latest.phase != RuntimePhase.stopping) {
+                RuntimeEvents.publish(
+                    RuntimeStatus(
+                        phase = RuntimePhase.failed,
+                        message = "Linux desktop stopped",
+                        detail = "Desktop process exited with code $exitCode. See diagnostics for full logs.",
+                        installed = true,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun publishRunning(message: String) {
+        RuntimeEvents.publish(
+            RuntimeStatus(
+                phase = RuntimePhase.running,
+                progress = 1.0,
+                message = message,
+                installed = true,
+                running = true,
+            ),
+        )
+    }
+
+    private fun publishStartFailure(primary: Throwable, original: Throwable? = null) {
+        RuntimeEvents.publish(
+            RuntimeStatus(
+                phase = RuntimePhase.failed,
+                message = "Could not start Linux",
+                detail = buildString {
+                    appendLine(primary.stackTraceToString())
+                    if (original != null && original !== primary) {
+                        appendLine()
+                        appendLine("Initial runtime failure:")
+                        append(original.stackTraceToString())
+                    }
+                }.takeLast(16_000),
+                installed = paths.installMarker.isFile,
+            ),
+        )
     }
 
     fun stop() {
@@ -170,6 +217,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 paths.rootfsStaging.deleteRecursively()
                 paths.rootfsPrevious.deleteRecursively()
                 paths.installMarker.delete()
+                paths.previousInstallMarker.delete()
                 RuntimeEvents.publish(RuntimeStatus())
             }
         }
@@ -223,6 +271,7 @@ class RuntimeEngine private constructor(private val context: Context) {
             "status" to status().asMap(),
             "nativeLibraryDir" to context.applicationInfo.nativeLibraryDir,
             "rootfs" to paths.rootfs.absolutePath,
+            "rollbackAvailable" to installer.canRollback(),
             "anlandSocket" to paths.anlandSocket.absolutePath,
             "anlandDaemon" to daemon.isRunning(),
             "desktopProcess" to session.isRunning(),

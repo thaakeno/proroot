@@ -53,6 +53,26 @@ class RuntimeInstaller(
         )
     }
 
+    fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory
+
+    fun rollback(): Boolean {
+        if (!canRollback()) return false
+
+        paths.rootfsStaging.deleteRecursively()
+        paths.rootfs.deleteRecursively()
+        check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+            "Could not restore previous rootfs"
+        }
+
+        if (paths.previousInstallMarker.isFile) {
+            paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+            paths.previousInstallMarker.delete()
+        } else {
+            paths.installMarker.writeText("runtime=recovered\n")
+        }
+        return true
+    }
+
     private fun installGuestScripts(rootfs: File) {
         val targetDir = File(rootfs, "usr/local/lib/proroot")
         targetDir.mkdirs()
@@ -112,16 +132,30 @@ class RuntimeInstaller(
 
     private fun activate(staging: File) {
         check(staging.isDirectory) { "Staging rootfs disappeared" }
+
         paths.rootfsPrevious.deleteRecursively()
+        paths.previousInstallMarker.delete()
+
         if (paths.rootfs.exists()) {
-            check(paths.rootfs.renameTo(paths.rootfsPrevious)) { "Could not preserve previous rootfs" }
+            check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
+                "Could not preserve previous rootfs"
+            }
+            if (paths.installMarker.isFile) {
+                paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
+            }
         }
+
         try {
             check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
-            paths.rootfsPrevious.deleteRecursively()
         } catch (t: Throwable) {
             paths.rootfs.deleteRecursively()
-            if (paths.rootfsPrevious.exists()) paths.rootfsPrevious.renameTo(paths.rootfs)
+            if (paths.rootfsPrevious.exists()) {
+                paths.rootfsPrevious.renameTo(paths.rootfs)
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
             throw t
         }
     }

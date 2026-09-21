@@ -81,10 +81,14 @@ class RuntimeController extends ChangeNotifier {
     }
 
     if (!snapshot.running) {
-      _runningCompleter = Completer<void>();
-      await bridge.start();
-      await _runningCompleter!.future.timeout(const Duration(seconds: 35));
-      _runningCompleter = null;
+      final pending = Completer<void>();
+      _runningCompleter = pending;
+      try {
+        await bridge.start();
+        await pending.future.timeout(const Duration(seconds: 40));
+      } finally {
+        if (_runningCompleter == pending) _runningCompleter = null;
+      }
     }
 
     await bridge.launchDesktopApp(desktopId);
