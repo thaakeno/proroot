@@ -228,60 +228,72 @@ class DesktopProvisioner(
 
         onProgress(
             ProvisioningStage(
-                group.start,
-                group.message,
-                group.expectedSeconds + group.etaAfterSeconds,
+                progress = group.start,
+                message = group.message,
+                etaSeconds = group.expectedSeconds + group.etaAfterSeconds,
+                stageProgress = 0.0,
+                stageDetail = "Resolving package dependencies",
             ),
         )
 
-        val started = System.nanoTime()
-        val finished = AtomicBoolean(false)
-        val command = "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages"
-
-        val heartbeat = thread(
-            name = "installer-progress-heartbeat",
-            isDaemon = true,
-        ) {
-            while (!finished.get()) {
-                val elapsed = (System.nanoTime() - started) / 1_000_000_000.0
-                val fraction = (elapsed / group.expectedSeconds.toDouble()).coerceIn(0.0, 0.90)
-                val progress = group.start + (group.end - group.start) * fraction
-                val eta = max(
-                    0L,
-                    (group.expectedSeconds - elapsed.toLong()) + group.etaAfterSeconds,
-                )
-                onProgress(ProvisioningStage(progress, group.message, eta))
-                try {
-                    Thread.sleep(1_000L)
-                } catch (_: InterruptedException) {
-                    break
-                }
-            }
-        }
+        val command =
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends " +
+                "-o APT::Status-Fd=1 -o Dpkg::Progress-Fancy=0 $packages"
+        val tracker = AptProgressTracker()
 
         journal.commandStart(command)
-        val result = try {
-            runner.execStreaming(
-                command = command,
-                timeoutSeconds = 1_800,
-                rootfs = rootfs,
-                fakeRoot = true,
-            ) { line ->
-                journal.commandOutput(line)
+        val result = runner.execStreaming(
+            command = command,
+            timeoutSeconds = 1_800,
+            rootfs = rootfs,
+            fakeRoot = true,
+        ) { line ->
+            journal.commandOutput(line)
+
+            val apt = tracker.accept(line) ?: return@execStreaming
+            val weighted = when (apt.phase) {
+                AptProgressPhase.downloading -> apt.fraction * 0.35
+                AptProgressPhase.installing -> 0.35 + apt.fraction * 0.65
             }
-        } finally {
-            finished.set(true)
-            heartbeat.interrupt()
-            heartbeat.join(1_500L)
+            val overall = group.start + (group.end - group.start) * weighted
+            val phaseMessage = when (apt.phase) {
+                AptProgressPhase.downloading ->
+                    "Downloading " + group.message.removePrefix("Installing ").lowercase()
+                AptProgressPhase.installing -> group.message
+            }
+            val fallbackEta = when (apt.phase) {
+                AptProgressPhase.downloading ->
+                    group.expectedSeconds + group.etaAfterSeconds
+                AptProgressPhase.installing ->
+                    ((1.0 - apt.fraction) * group.expectedSeconds).toLong() +
+                        group.etaAfterSeconds
+            }
+
+            onProgress(
+                ProvisioningStage(
+                    progress = overall,
+                    message = phaseMessage,
+                    etaSeconds = (apt.etaSeconds ?: fallbackEta) + group.etaAfterSeconds,
+                    stageProgress = apt.fraction,
+                    stageDetail = apt.detail,
+                    stageDownloadedBytes = apt.downloadedBytes,
+                    stageTotalBytes = apt.totalBytes,
+                    stageSpeedBytesPerSecond = apt.speedBytesPerSecond,
+                    completedItems = apt.completedItems,
+                    totalItems = apt.totalItems,
+                ),
+            )
         }
         journal.commandEnd(result)
         checkResult(result)
 
         onProgress(
             ProvisioningStage(
-                group.end,
-                group.message,
-                group.etaAfterSeconds,
+                progress = group.end,
+                message = group.message,
+                etaSeconds = group.etaAfterSeconds,
+                stageProgress = 1.0,
+                stageDetail = "Complete",
             ),
         )
     }
