@@ -9,13 +9,28 @@ class ProrootRunner(
     private val paths: RuntimePaths,
 ) : GuestRunner {
     override val runtimeId: String = "proroot"
+
     private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
     private val launcher = File(nativeDir, "libproroot.so")
+    private val runtimeLib = File(nativeDir, "libproroot-runtime.so")
+    private val linkerLib = File(nativeDir, "libproroot-linker.so")
+    private val stubLoader = File(nativeDir, "libproroot-stub-loader.so")
+    private val bridgeLib = File(nativeDir, "libproroot-bridge.so")
     private val procCompat = ProcCompatBridge(context, paths)
     private val networkBridge = HostNetworkBridge(context)
 
     init {
-        check(launcher.isFile) { "libproroot.so is missing from nativeLibraryDir" }
+        listOf(
+            launcher,
+            runtimeLib,
+            linkerLib,
+            stubLoader,
+            bridgeLib,
+        ).forEach { file ->
+            check(file.isFile && file.length() > 0L) {
+                "Missing proroot runtime file in nativeLibraryDir: ${file.name}"
+            }
+        }
         procCompat.start()
     }
 
@@ -34,12 +49,18 @@ class ProrootRunner(
             "-r", rootfs.absolutePath,
         )
         if (fakeRoot) args += "-0"
+        args += listOf("-w", workingDirectory)
+
+        addBind(args, "/dev", "/dev")
+        addBind(args, "/dev/urandom", "/dev/random")
+        addBind(args, "/proc", "/proc")
+        addBind(args, "/sys", "/sys")
+        addBind(args, "/system", "/system")
+        addBind(args, "/apex", "/apex")
+        addBind(args, "/proc/self/fd", "/dev/fd")
+
         args += listOf(
-            "--link2symlink",
-            "-w", workingDirectory,
-            "-b", "/dev:/dev",
             "-b", "${paths.shmDir.absolutePath}:/dev/shm",
-            "-b", "/proc:/proc",
             "-b", "${paths.procStat.absolutePath}:/proc/stat",
             "-b", "${paths.procUptime.absolutePath}:/proc/uptime",
             "-b", "${paths.procLoadavg.absolutePath}:/proc/loadavg",
@@ -50,10 +71,10 @@ class ProrootRunner(
             "-b", "${paths.procVmallocinfo.absolutePath}:/proc/vmallocinfo",
             "-b", "${paths.procFilesystems.absolutePath}:/proc/filesystems",
             "-b", "${paths.procPciDevices.absolutePath}:/proc/bus/pci/devices",
-            "-b", "/sys:/sys",
             "-b", "${paths.anlandDir.absolutePath}:/tmp/anland",
             "-b", "${paths.sharedDir.absolutePath}:/mnt/android",
             "-b", "${paths.hostInfoFile.absolutePath}:/run/proroot-host-info",
+            "--link2symlink",
             "/bin/bash", "-lc", shellCommand,
         )
 
@@ -85,7 +106,11 @@ class ProrootRunner(
             process.inputStream.bufferedReader().useLines { lines ->
                 lines.forEach { output.appendLine(it) }
             }
-        }.apply { start() }
+        }.apply {
+            name = "proroot-command-output"
+            isDaemon = true
+            start()
+        }
 
         val completed = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
         if (!completed) {
@@ -106,7 +131,8 @@ class ProrootRunner(
             shellCommand = shellCommand,
             fakeRoot = true,
             extraEnvironment = mapOf(
-                "PROROOT_LOG_APPEND" to File(paths.logsDir, "proroot-system-services.log").absolutePath,
+                "PROROOT_LOG_APPEND" to
+                    File(paths.logsDir, "proroot-system-services.log").absolutePath,
             ),
         ).start()
 
@@ -116,7 +142,8 @@ class ProrootRunner(
             shellCommand = shellCommand,
             fakeRoot = false,
             extraEnvironment = mapOf(
-                "PROROOT_LOG_APPEND" to File(paths.logsDir, "proroot-crash.log").absolutePath,
+                "PROROOT_LOG_APPEND" to
+                    File(paths.logsDir, "proroot-crash.log").absolutePath,
             ),
         ).start()
 
@@ -127,11 +154,21 @@ class ProrootRunner(
             shellCommand = shellCommand,
             fakeRoot = false,
             extraEnvironment = mapOf(
-                "PROROOT_LOG_APPEND" to File(paths.logsDir, "proroot-app-runtime.log").absolutePath,
+                "PROROOT_LOG_APPEND" to
+                    File(paths.logsDir, "proroot-app-runtime.log").absolutePath,
             ),
         )
             .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
             .start()
+    }
+
+    private fun addBind(
+        args: MutableList<String>,
+        source: String,
+        target: String,
+    ) {
+        if (!File(source).exists()) return
+        args += listOf("-b", "$source:$target")
     }
 
     private fun hostEnvironment(
@@ -147,8 +184,12 @@ class ProrootRunner(
             "SHELL" to "/bin/bash",
             "TMPDIR" to paths.tmpDir.absolutePath,
             "PROROOT_TMP_DIR" to paths.tmpDir.absolutePath,
+            "PROROOT_LIB_PATH" to runtimeLib.absolutePath,
+            "PROROOT_LINKER_PATH" to linkerLib.absolutePath,
+            "PROROOT_STUB_LOADER" to stubLoader.absolutePath,
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG" to "C.UTF-8",
+            "LC_ALL" to "C.UTF-8",
         )
         env.putAll(extra)
         return env
