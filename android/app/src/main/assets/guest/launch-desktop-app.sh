@@ -8,15 +8,38 @@ env_file="$runtime/proroot-session.env"
 test -r "$env_file"
 . "$env_file"
 
-socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' 2>/dev/null | head -n1)"
-test -n "$socket"
+wayland_socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit 2>/dev/null)"
+test -n "$wayland_socket"
+export WAYLAND_DISPLAY="${wayland_socket##*/}"
 
-export WAYLAND_DISPLAY="${socket##*/}"
-export XDG_CURRENT_DESKTOP=KDE
-export XDG_SESSION_DESKTOP=KDE
-export XDG_SESSION_TYPE=wayland
-export QT_QPA_PLATFORM=wayland
-export GDK_BACKEND=wayland,x11
-export SDL_VIDEODRIVER=wayland
+x_socket="$(find /tmp/.X11-unix -maxdepth 1 -type s -name 'X*' -print -quit 2>/dev/null || true)"
+if [[ -n "$x_socket" ]]; then
+    display_number="${x_socket##*/X}"
+    export DISPLAY=":$display_number"
+
+    xauthority="$(find "$runtime" -maxdepth 1 -type f -name 'xauth_*' -print -quit 2>/dev/null || true)"
+    if [[ -n "$xauthority" ]]; then
+        export XAUTHORITY="$xauthority"
+    else
+        unset XAUTHORITY
+    fi
+else
+    unset DISPLAY XAUTHORITY
+fi
+
+activation_vars=(
+    HOME USER LOGNAME SHELL LANG LC_ALL
+    XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR
+    XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
+    DBUS_SYSTEM_BUS_ADDRESS WAYLAND_DISPLAY
+    PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH PULSE_SERVER
+    QT_QPA_PLATFORM QT_SCALE_FACTOR GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND
+    ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED
+    EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER
+    FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS PROROOT_REFRESH_HZ
+)
+[[ -n "${DISPLAY:-}" ]] && activation_vars+=(DISPLAY)
+[[ -n "${XAUTHORITY:-}" ]] && activation_vars+=(XAUTHORITY)
+dbus-update-activation-environment "${activation_vars[@]}" >/dev/null
 
 exec gtk-launch "$app_id"
