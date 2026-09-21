@@ -102,8 +102,51 @@ chmod 0600 "$env_file"
 
 xdg-user-dirs-update >/dev/null 2>&1 || true
 
-set +e
-startplasma-wayland
-status=$?
-set -e
-exit "$status"
+session_pid=""
+cleanup_session() {
+    if [[ -n "$session_pid" ]]; then
+        kill "$session_pid" >/dev/null 2>&1 || true
+    fi
+}
+trap 'cleanup_session; cleanup_audio' EXIT INT TERM
+
+# Start the full Plasma session first. A PATH shim strips the --xwayland
+# argument because Xwayland currently hits Android SIGSYS under proroot.
+startplasma-wayland &
+session_pid=$!
+
+healthy=0
+for _ in $(seq 1 120); do
+    if ! kill -0 "$session_pid" >/dev/null 2>&1; then
+        break
+    fi
+    if pgrep -x kwin_wayland >/dev/null 2>&1 &&
+       pgrep -x plasmashell >/dev/null 2>&1 &&
+       find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q .; then
+        healthy=1
+        break
+    fi
+    sleep 0.1
+done
+
+if [[ "$healthy" -eq 1 ]]; then
+    # Keep this supervisor alive for the lifetime of KWin even if
+    # startplasma-wayland's launcher process returns after startup.
+    while pgrep -x kwin_wayland >/dev/null 2>&1; do
+        sleep 1
+    done
+    wait "$session_pid" >/dev/null 2>&1 || true
+    exit 0
+fi
+
+# Full-session startup can fail on rootless/non-systemd Android environments.
+# Upstream Anland itself uses this direct Wayland fallback.
+kill "$session_pid" >/dev/null 2>&1 || true
+wait "$session_pid" >/dev/null 2>&1 || true
+pkill -x kwin_wayland >/dev/null 2>&1 || true
+pkill -x plasmashell >/dev/null 2>&1 || true
+sleep 0.3
+
+kwin_wayland plasmashell &
+session_pid=$!
+wait "$session_pid"
