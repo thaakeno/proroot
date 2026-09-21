@@ -92,7 +92,13 @@ class RuntimeInstaller(
             context.assets.open("guest/$name").use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
-            Os.chmod(target.absolutePath, 0x1ED)
+
+            val executable = name.endsWith(".sh") ||
+                name.endsWith("-bridge.py")
+            Os.chmod(
+                target.absolutePath,
+                if (executable) 0x1ED else 0x1A4,
+            )
         }
     }
 
