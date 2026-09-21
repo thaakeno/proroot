@@ -17,6 +17,8 @@ class RuntimeInstaller(
     companion object {
         private const val INTERNAL_READY_MARKER = ".proroot-runtime-ready"
         private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
+        private const val BASE_PROVISIONED_MARKER = ".proroot-base-provisioned"
+        private const val GRAPHICS_INSTALLED_MARKER = ".proroot-graphics-installed"
     }
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
@@ -129,45 +131,66 @@ class RuntimeInstaller(
         stagePackage(requireAsset(assets, RuntimeAssetKind.XWAYLAND_PACKAGE), File(packageDir, "xwayland/xwayland.deb"))
         extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
-        provisioner.provisionBase(staging) { stage ->
+        val baseProvisionedMarker = File(staging, BASE_PROVISIONED_MARKER)
+        if (!baseProvisionedMarker.isFile) {
+            provisioner.provisionBase(staging) { stage ->
+                emit(
+                    installStatus(
+                        phase = RuntimePhase.provisioning,
+                        progress = stage.progress,
+                        message = stage.message,
+                        downloadedBytes = if (stage.stageTotalBytes > 0L) {
+                            stage.stageDownloadedBytes
+                        } else {
+                            totalDownloadBytes
+                        },
+                        totalBytes = if (stage.stageTotalBytes > 0L) {
+                            stage.stageTotalBytes
+                        } else {
+                            totalDownloadBytes
+                        },
+                        speedBytesPerSecond = stage.stageSpeedBytesPerSecond,
+                        etaSeconds = stage.etaSeconds,
+                        stageProgress = stage.stageProgress,
+                        stageDetail = stage.stageDetail,
+                        stageDownloadedBytes = stage.stageDownloadedBytes,
+                        stageTotalBytes = stage.stageTotalBytes,
+                        stageSpeedBytesPerSecond = stage.stageSpeedBytesPerSecond,
+                        completedItems = stage.completedItems,
+                        totalItems = stage.totalItems,
+                    ),
+                )
+            }
+            baseProvisionedMarker.writeText("ok\n")
+        } else {
             emit(
                 installStatus(
                     phase = RuntimePhase.provisioning,
-                    progress = stage.progress,
-                    message = stage.message,
-                    downloadedBytes = if (stage.stageTotalBytes > 0L) {
-                        stage.stageDownloadedBytes
-                    } else {
-                        totalDownloadBytes
-                    },
-                    totalBytes = if (stage.stageTotalBytes > 0L) {
-                        stage.stageTotalBytes
-                    } else {
-                        totalDownloadBytes
-                    },
-                    speedBytesPerSecond = stage.stageSpeedBytesPerSecond,
-                    etaSeconds = stage.etaSeconds,
-                    stageProgress = stage.stageProgress,
-                    stageDetail = stage.stageDetail,
-                    stageDownloadedBytes = stage.stageDownloadedBytes,
-                    stageTotalBytes = stage.stageTotalBytes,
-                    stageSpeedBytesPerSecond = stage.stageSpeedBytesPerSecond,
-                    completedItems = stage.completedItems,
-                    totalItems = stage.totalItems,
+                    progress = 0.94,
+                    message = "Resuming completed desktop provisioning",
+                    etaSeconds = 45,
+                    downloadedBytes = totalDownloadBytes,
                 ),
             )
         }
 
-        emit(
-            installStatus(
-                phase = RuntimePhase.provisioning,
-                progress = 0.94,
-                message = "Installing pinned Adreno 840 graphics",
-                etaSeconds = 45,
-                downloadedBytes = totalDownloadBytes,
-            ),
-        )
-        extractor.extractTarGz(requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY), staging)
+        val graphicsMarker = File(staging, GRAPHICS_INSTALLED_MARKER)
+        if (!graphicsMarker.isFile) {
+            emit(
+                installStatus(
+                    phase = RuntimePhase.provisioning,
+                    progress = 0.94,
+                    message = "Installing pinned Adreno 840 graphics",
+                    etaSeconds = 45,
+                    downloadedBytes = totalDownloadBytes,
+                ),
+            )
+            installMesaOverlay(
+                staging = staging,
+                archive = requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY),
+            )
+            graphicsMarker.writeText("ok\n")
+        }
 
         emit(
             installStatus(
@@ -196,6 +219,32 @@ class RuntimeInstaller(
         } catch (t: Throwable) {
             journal.failure(t)
             throw t
+        }
+    }
+
+    private fun installMesaOverlay(
+        staging: File,
+        archive: File,
+    ) {
+        val overlay = File(staging, "opt/proroot-packages/mesa/overlay.tar.gz")
+        overlay.parentFile?.mkdirs()
+        archive.copyTo(overlay, overwrite = true)
+
+        val result = installRunner.exec(
+            command = """
+                set -e
+                command -v tar >/dev/null 2>&1
+                tar -xzf /opt/proroot-packages/mesa/overlay.tar.gz -C /
+                rm -f /opt/proroot-packages/mesa/overlay.tar.gz
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Installing pinned Mesa overlay", result)
+        check(result.successful) {
+            "Pinned Mesa overlay installation failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). Full output is in install.log."
         }
     }
 
