@@ -124,9 +124,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
               const SizedBox(height: 8),
               FilledButton.tonalIcon(
                 onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
                   await Clipboard.setData(ClipboardData(text: text));
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  if (!mounted) {
+                    return;
+                  }
+                  messenger.showSnackBar(
                     const SnackBar(content: Text('Diagnostics copied')),
                   );
                 },
