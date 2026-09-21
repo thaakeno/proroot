@@ -64,6 +64,7 @@ class DesktopProvisioner(
         """.trimIndent())
 
         installPinnedDesktopStack(rootfs)
+        installBrave(rootfs)
         installVsCode(rootfs)
         configureDesktop(rootfs)
         protectGraphicsStack(rootfs)
@@ -79,7 +80,7 @@ class DesktopProvisioner(
             test -x /usr/bin/dolphin
             test -x /usr/bin/firefox-esr
             test -x /usr/bin/code
-            test -x /usr/local/bin/brave-browser
+            test -x /usr/bin/brave-browser
             test -x /usr/local/lib/proroot/start-desktop.sh
             test -c /dev/kgsl-3d0
 
@@ -89,7 +90,7 @@ class DesktopProvisioner(
               vulkaninfo --summary 2>&1 | tee /tmp/proroot-vulkan-summary.txt
 
             grep -Eiq 'Adreno|turnip' /tmp/proroot-vulkan-summary.txt
-            /usr/local/bin/brave-browser --version
+            brave-browser --version
             firefox-esr --version
         """.trimIndent(), fakeRoot = false)
     }
@@ -128,6 +129,14 @@ class DesktopProvisioner(
             apt-get install -y /opt/proroot-packages/xwayland/xwayland.deb
             find /opt/proroot-packages/kwin -type f -name '*.deb' -print0 \
               | xargs -0 -r apt-get install -y
+        """.trimIndent())
+    }
+
+    private fun installBrave(rootfs: File) {
+        runChecked(rootfs, """
+            set -e
+            DEBIAN_FRONTEND=noninteractive apt-get install -y /opt/proroot-packages/brave/brave.deb
+            update-desktop-database /usr/share/applications || true
         """.trimIndent())
     }
 
