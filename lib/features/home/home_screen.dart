@@ -33,19 +33,14 @@ class HomeScreen extends StatelessWidget {
     return '${size.toStringAsFixed(unit >= 2 ? 1 : 0)} ${units[unit]}';
   }
 
-  String _eta(RuntimeSnapshot snapshot) {
-    if (snapshot.speedBytesPerSecond <= 0 ||
-        snapshot.totalBytes <= snapshot.downloadedBytes) {
-      return '';
-    }
-    final seconds =
-        ((snapshot.totalBytes - snapshot.downloadedBytes) /
-                snapshot.speedBytesPerSecond)
-            .ceil();
-    if (seconds < 60) return '~${seconds}s left';
-    final minutes = (seconds / 60).ceil();
-    if (minutes < 60) return '~${minutes}m left';
-    return '~${seconds ~/ 3600}h ${((seconds % 3600) / 60).ceil()}m left';
+  String _duration(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+    if (hours > 0) return '${hours}h ${minutes}m';
+    if (minutes > 0 && secs > 0) return '${minutes}m ${secs}s';
+    return '${minutes}m';
   }
 
   @override
@@ -116,7 +111,10 @@ class HomeScreen extends StatelessWidget {
                         _InstallProgress(
                           snapshot: snapshot,
                           bytes: _bytes,
-                          eta: _eta(snapshot),
+                          elapsed: _duration(snapshot.elapsedSeconds),
+                          eta: snapshot.etaSeconds == null
+                              ? 'Calculating…'
+                              : '~${_duration(snapshot.etaSeconds!)}',
                         ),
                         const SizedBox(height: 18),
                         SizedBox(
@@ -266,11 +264,13 @@ class _InstallProgress extends StatelessWidget {
   const _InstallProgress({
     required this.snapshot,
     required this.bytes,
+    required this.elapsed,
     required this.eta,
   });
 
   final RuntimeSnapshot snapshot;
   final String Function(int) bytes;
+  final String elapsed;
   final String eta;
 
   @override
@@ -313,7 +313,6 @@ class _InstallProgress extends StatelessWidget {
               ),
               if (snapshot.speedBytesPerSecond > 0)
                 Text('${bytes(snapshot.speedBytesPerSecond)}/s'),
-              if (eta.isNotEmpty) Text(eta),
             ],
           )
         else
@@ -321,6 +320,15 @@ class _InstallProgress extends StatelessWidget {
             'Overall installation progress',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 14,
+          runSpacing: 4,
+          children: [
+            Text('Elapsed $elapsed'),
+            Text('ETA $eta'),
+          ],
+        ),
       ],
     );
   }
