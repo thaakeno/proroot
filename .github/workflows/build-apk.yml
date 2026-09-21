@@ -54,7 +54,7 @@ jobs:
         run: flutter pub get
 
       - name: Build ARM64 debug APK
-        run: flutter build apk --debug --target-platform android-arm64
+        run: flutter build apk --debug --target-platform android-arm64 --build-number "$GITHUB_RUN_NUMBER"
 
       - name: Prepare artifact
         run: |
