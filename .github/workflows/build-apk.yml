@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: installer-runtime-split
+# rebuild marker: validated-package-set
 
 on:
   push:
