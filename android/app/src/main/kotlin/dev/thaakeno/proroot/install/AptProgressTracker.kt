@@ -21,72 +21,85 @@ data class AptProgressSnapshot(
 
 class AptProgressTracker {
     private val needBytes = Regex("""Need to get\s+([0-9.]+)\s+([kMGT]?B)""")
-    private val fileCount = Regex("""file\s+(\d+)\s+of\s+(\d+)""", RegexOption.IGNORE_CASE)
-    private val remaining = Regex("""(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?\s+remaining""", RegexOption.IGNORE_CASE)
+    private val getLine = Regex("""^Get:(\d+)\s+.*\[([0-9.]+)\s+([kMGT]?B)\]$""")
+    private val fetchedLine = Regex(
+        """^Fetched\s+([0-9.]+)\s+([kMGT]?B)\s+in\s+(.+?)(?:\s+\(([^)]+)\))?$""",
+    )
+    private val packagePlan = Regex(
+        """(\d+) upgraded,\s+(\d+) newly installed,\s+(\d+) to remove""",
+    )
+    private val unpacking = Regex("""^Unpacking\s+([^\s]+)""")
+    private val settingUp = Regex("""^Setting up\s+([^\s]+)""")
+    private val processingTriggers = Regex("""^Processing triggers for\s+([^\s]+)""")
 
     private var totalBytes = 0L
-    private var totalItems = 0
+    private var downloadedBytes = 0L
     private var lastBytes = 0L
     private var lastSampleNanos = System.nanoTime()
     private var speedBytesPerSecond = 0L
 
+    private var totalPackages = 0
+    private val unpackedPackages = linkedSetOf<String>()
+    private val configuredPackages = linkedSetOf<String>()
+
     fun accept(line: String): AptProgressSnapshot? {
         parseArchiveTotal(line)
+        parsePackagePlan(line)
 
-        if (line.startsWith("dlstatus:")) {
-            val parts = line.split(':', limit = 4)
-            if (parts.size < 4) return null
-
-            val completed = parts[1].trim().toIntOrNull() ?: 0
-            val percent = parts[2].trim().toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: return null
-            val detail = parts[3].trim()
-            val counts = fileCount.find(detail)
-            val reportedTotal = counts?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
-            if (reportedTotal > 0) totalItems = reportedTotal
-
-            val downloaded = if (totalBytes > 0L) {
-                (totalBytes * (percent / 100.0)).roundToLong().coerceIn(0L, totalBytes)
-            } else {
-                0L
+        getLine.matchEntire(line)?.let { match ->
+            val item = match.groupValues[1].toIntOrNull() ?: 0
+            val bytes = parseBytes(match.groupValues[2], match.groupValues[3])
+            if (bytes > 0L) {
+                downloadedBytes = (downloadedBytes + bytes)
+                    .coerceAtMost(totalBytes.takeIf { it > 0L } ?: Long.MAX_VALUE)
+                updateSpeed(downloadedBytes)
             }
-            updateSpeed(downloaded)
 
             return AptProgressSnapshot(
                 phase = AptProgressPhase.downloading,
-                fraction = percent / 100.0,
-                detail = detail,
-                downloadedBytes = downloaded,
+                fraction = downloadFraction(),
+                detail = line.substringBeforeLast(" [").removePrefix("Get:$item ").trim(),
+                downloadedBytes = downloadedBytes,
                 totalBytes = totalBytes,
                 speedBytesPerSecond = speedBytesPerSecond,
-                completedItems = completed,
-                totalItems = totalItems,
-                etaSeconds = parseEta(detail),
+                completedItems = item,
+                totalItems = 0,
+                etaSeconds = downloadEtaSeconds(),
             )
         }
 
-        if (line.startsWith("pmstatus:")) {
-            val parts = line.split(':', limit = 4)
-            if (parts.size < 4) return null
-
-            val percent = parts[2].trim().toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: return null
-            val detail = parts[3].trim()
-            val completed = if (totalItems > 0) {
-                ((percent / 100.0) * totalItems).toInt().coerceIn(0, totalItems)
-            } else {
-                0
+        fetchedLine.matchEntire(line)?.let { match ->
+            val fetched = parseBytes(match.groupValues[1], match.groupValues[2])
+            if (fetched > 0L) {
+                downloadedBytes = if (totalBytes > 0L) totalBytes else fetched
             }
+            updateSpeed(downloadedBytes)
 
             return AptProgressSnapshot(
-                phase = AptProgressPhase.installing,
-                fraction = percent / 100.0,
-                detail = detail,
-                downloadedBytes = totalBytes,
-                totalBytes = totalBytes,
-                speedBytesPerSecond = 0L,
-                completedItems = completed,
-                totalItems = totalItems,
-                etaSeconds = null,
+                phase = AptProgressPhase.downloading,
+                fraction = 1.0,
+                detail = line,
+                downloadedBytes = downloadedBytes,
+                totalBytes = totalBytes.takeIf { it > 0L } ?: downloadedBytes,
+                speedBytesPerSecond = speedBytesPerSecond,
+                completedItems = 0,
+                totalItems = 0,
+                etaSeconds = 0,
             )
+        }
+
+        unpacking.find(line)?.let { match ->
+            unpackedPackages += normalizePackage(match.groupValues[1])
+            return installSnapshot(line)
+        }
+
+        settingUp.find(line)?.let { match ->
+            configuredPackages += normalizePackage(match.groupValues[1])
+            return installSnapshot(line)
+        }
+
+        processingTriggers.find(line)?.let {
+            return installSnapshot(line)
         }
 
         return null
@@ -94,22 +107,59 @@ class AptProgressTracker {
 
     private fun parseArchiveTotal(line: String) {
         val match = needBytes.find(line) ?: return
-        val value = match.groupValues[1].toDoubleOrNull() ?: return
-        val unit = match.groupValues[2]
-        totalBytes = when (unit) {
-            "kB" -> (value * 1_000.0).roundToLong()
-            "MB" -> (value * 1_000_000.0).roundToLong()
-            "GB" -> (value * 1_000_000_000.0).roundToLong()
-            "TB" -> (value * 1_000_000_000_000.0).roundToLong()
-            "B" -> value.roundToLong()
-            else -> totalBytes
+        totalBytes = parseBytes(match.groupValues[1], match.groupValues[2])
+        downloadedBytes = 0L
+        lastBytes = 0L
+        lastSampleNanos = System.nanoTime()
+        speedBytesPerSecond = 0L
+    }
+
+    private fun parsePackagePlan(line: String) {
+        val match = packagePlan.find(line) ?: return
+        val upgraded = match.groupValues[1].toIntOrNull() ?: 0
+        val installed = match.groupValues[2].toIntOrNull() ?: 0
+        totalPackages = upgraded + installed
+    }
+
+    private fun installSnapshot(detail: String): AptProgressSnapshot {
+        val fraction = if (totalPackages > 0) {
+            ((unpackedPackages.size + configuredPackages.size).toDouble() /
+                (totalPackages * 2.0)).coerceIn(0.0, 1.0)
+        } else {
+            0.0
         }
+        val completed = configuredPackages.size.coerceAtMost(totalPackages.takeIf { it > 0 } ?: Int.MAX_VALUE)
+
+        return AptProgressSnapshot(
+            phase = AptProgressPhase.installing,
+            fraction = fraction,
+            detail = detail,
+            downloadedBytes = totalBytes.takeIf { it > 0L } ?: downloadedBytes,
+            totalBytes = totalBytes,
+            speedBytesPerSecond = 0L,
+            completedItems = completed,
+            totalItems = totalPackages,
+            etaSeconds = null,
+        )
+    }
+
+    private fun downloadFraction(): Double =
+        if (totalBytes > 0L) {
+            downloadedBytes.toDouble().div(totalBytes).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+
+    private fun downloadEtaSeconds(): Long? {
+        if (totalBytes <= 0L || speedBytesPerSecond <= 0L) return null
+        return ((totalBytes - downloadedBytes).coerceAtLeast(0L) / speedBytesPerSecond)
+            .takeIf { it > 0L }
     }
 
     private fun updateSpeed(currentBytes: Long) {
         val now = System.nanoTime()
         val elapsed = (now - lastSampleNanos) / 1_000_000_000.0
-        if (elapsed < 0.35) return
+        if (elapsed < 0.25) return
 
         speedBytesPerSecond = ((currentBytes - lastBytes) / elapsed)
             .roundToLong()
@@ -118,12 +168,18 @@ class AptProgressTracker {
         lastSampleNanos = now
     }
 
-    private fun parseEta(detail: String): Long? {
-        val match = remaining.find(detail) ?: return null
-        val hours = match.groupValues[1].toLongOrNull() ?: 0L
-        val minutes = match.groupValues[2].toLongOrNull() ?: 0L
-        val seconds = match.groupValues[3].toLongOrNull() ?: 0L
-        val total = hours * 3600L + minutes * 60L + seconds
-        return total.takeIf { it > 0L }
+    private fun parseBytes(value: String, unit: String): Long {
+        val number = value.toDoubleOrNull() ?: return 0L
+        return when (unit) {
+            "kB" -> (number * 1_000.0).roundToLong()
+            "MB" -> (number * 1_000_000.0).roundToLong()
+            "GB" -> (number * 1_000_000_000.0).roundToLong()
+            "TB" -> (number * 1_000_000_000_000.0).roundToLong()
+            "B" -> number.roundToLong()
+            else -> 0L
+        }
     }
+
+    private fun normalizePackage(raw: String): String =
+        raw.trim().removeSuffix(":").substringBefore("(")
 }
