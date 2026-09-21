@@ -4,6 +4,13 @@ import android.content.Context
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+data class AnlandConnectionState(
+    val consumerConnected: Boolean,
+    val producerConnected: Boolean,
+) {
+    val ready: Boolean get() = consumerConnected && producerConnected
+}
+
 class AnlandDaemon(
     context: Context,
     private val paths: RuntimePaths,
@@ -46,4 +53,23 @@ class AnlandDaemon(
     }
 
     fun isRunning(): Boolean = process?.isAlive == true
+
+    fun connectionState(): AnlandConnectionState {
+        val log = File(paths.logsDir, "anland-daemon.log")
+        if (!log.isFile) return AnlandConnectionState(false, false)
+
+        var consumer = false
+        var producer = false
+        log.useLines { lines ->
+            lines.forEach { line ->
+                when {
+                    "daemon: consumer connected" in line -> consumer = true
+                    "daemon: consumer disconnected" in line -> consumer = false
+                    "daemon: producer connected" in line -> producer = true
+                    "daemon: producer disconnected" in line -> producer = false
+                }
+            }
+        }
+        return AnlandConnectionState(consumer, producer)
+    }
 }
