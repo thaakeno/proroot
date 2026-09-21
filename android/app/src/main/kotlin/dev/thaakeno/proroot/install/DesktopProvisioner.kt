@@ -7,6 +7,7 @@ class DesktopProvisioner(
     private val runner: ProrootRunner,
     private val desktopUid: Int,
 ) {
+    private val rootlessServices = RootlessDesktopServicesConfigurator()
     fun provisionBase(
         rootfs: File,
         onProgress: (ProvisioningStage) -> Unit = {},
@@ -19,7 +20,7 @@ class DesktopProvisioner(
         runChecked(rootfs, """
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux \
-              dbus dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower \
+              dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower \
               python3-dbus python3-gi gir1.2-glib-2.0 \
               xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info \
               xdg-desktop-portal xdg-desktop-portal-kde \
@@ -80,7 +81,10 @@ class DesktopProvisioner(
         onProgress(ProvisioningStage(0.78, "Installing Visual Studio Code"))
         installVsCode(rootfs)
 
-        onProgress(ProvisioningStage(0.82, "Configuring the Linux desktop"))
+        onProgress(ProvisioningStage(0.82, "Configuring rootless desktop services"))
+        rootlessServices.configure(rootfs)
+
+        onProgress(ProvisioningStage(0.84, "Configuring the Linux desktop"))
         configureDesktop(rootfs)
 
         onProgress(ProvisioningStage(0.85, "Protecting the verified graphics stack"))
@@ -99,6 +103,12 @@ class DesktopProvisioner(
             test -x /usr/bin/firefox-esr
             test -x /usr/bin/code
             test -x /usr/bin/brave-browser-stable
+            test -x /usr/lib/polkit-1/polkitd
+            test -x /usr/libexec/packagekitd
+            test -x /usr/bin/pkcon
+            test -f /etc/dbus-1/system-services/org.freedesktop.PolicyKit1.service
+            test -f /etc/dbus-1/system-services/org.freedesktop.PackageKit.service
+            test -f /etc/polkit-1/rules.d/49-proroot-package-management.rules
             test -x /usr/local/lib/proroot/start-desktop.sh
             test -c /dev/kgsl-3d0
             test -r /proc/stat
