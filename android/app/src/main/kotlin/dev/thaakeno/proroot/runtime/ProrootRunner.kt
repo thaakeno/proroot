@@ -7,7 +7,8 @@ import java.util.concurrent.TimeUnit
 class ProrootRunner(
     private val context: Context,
     private val paths: RuntimePaths,
-) {
+) : GuestRunner {
+    override val runtimeId: String = "proroot"
     private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
     private val launcher = File(nativeDir, "libproroot.so")
     private val procCompat = ProcCompatBridge(context, paths)
@@ -65,14 +66,15 @@ class ProrootRunner(
             }
     }
 
-    fun exec(
+    override fun exec(
         command: String,
-        timeoutSeconds: Long = 120,
-        rootfs: File = paths.rootfs,
-        fakeRoot: Boolean = true,
+        timeoutSeconds: Long,
+        rootfs: File?,
+        fakeRoot: Boolean,
     ): CommandResult {
+        val resolvedRootfs = rootfs ?: paths.rootfs
         val process = command(
-            rootfs = rootfs,
+            rootfs = resolvedRootfs,
             workingDirectory = if (fakeRoot) "/root" else "/home/linux",
             shellCommand = command,
             fakeRoot = fakeRoot,
@@ -98,7 +100,7 @@ class ProrootRunner(
         )
     }
 
-    fun startRootService(shellCommand: String): Process =
+    override fun startRootService(shellCommand: String): Process =
         command(
             workingDirectory = "/root",
             shellCommand = shellCommand,
@@ -108,7 +110,7 @@ class ProrootRunner(
             ),
         ).start()
 
-    fun startSession(shellCommand: String): Process =
+    override fun startSession(shellCommand: String): Process =
         command(
             workingDirectory = "/home/linux",
             shellCommand = shellCommand,
@@ -118,7 +120,7 @@ class ProrootRunner(
             ),
         ).start()
 
-    fun startDetachedUser(shellCommand: String, logFile: File): Process {
+    override fun startDetachedUser(shellCommand: String, logFile: File): Process {
         logFile.parentFile?.mkdirs()
         return command(
             workingDirectory = "/home/linux",
