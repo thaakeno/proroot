@@ -52,18 +52,21 @@ class ProcCompatBridge(
 
         val uptimeMs = SystemClock.elapsedRealtime().coerceAtLeast(1L)
         val uptimeSeconds = uptimeMs / 1000.0
-        val processCpuMs = Process.getElapsedCpuTime().coerceAtLeast(0L)
+        val clockTicks = runCatching {
+            Os.sysconf(OsConstants._SC_CLK_TCK).coerceAtLeast(1L)
+        }.getOrDefault(100L)
+        val processTicks = visibleProcessCpuTicks().takeIf { it > 0L }
+            ?: ((Process.getElapsedCpuTime() * clockTicks) / 1000L)
+        val totalTicks = ((uptimeMs * cpuCount * clockTicks) / 1000L).coerceAtLeast(1L)
+        val clampedProcessTicks = processTicks.coerceIn(0L, totalTicks)
+        val idleTicks = (totalTicks - clampedProcessTicks).coerceAtLeast(0L)
 
-        val totalTicks = ((uptimeMs * cpuCount) / 10L).coerceAtLeast(1L)
-        val processTicks = (processCpuMs / 10L).coerceIn(0L, totalTicks)
-        val idleTicks = (totalTicks - processTicks).coerceAtLeast(0L)
-
-        val perCpuUser = processTicks / cpuCount
+        val perCpuUser = clampedProcessTicks / cpuCount
         val perCpuIdle = idleTicks / cpuCount
         val bootTimeSeconds = (System.currentTimeMillis() / 1000L) - uptimeSeconds.toLong()
 
         val stat = buildString {
-            appendLine("cpu $processTicks 0 0 $idleTicks 0 0 0 0 0 0")
+            appendLine("cpu $clampedProcessTicks 0 0 $idleTicks 0 0 0 0 0 0")
             repeat(cpuCount) { index ->
                 appendLine("cpu$index $perCpuUser 0 0 $perCpuIdle 0 0 0 0 0 0")
             }
@@ -78,7 +81,7 @@ class ProcCompatBridge(
 
         val aggregateIdleSeconds = max(
             0.0,
-            uptimeSeconds * cpuCount - processCpuMs / 1000.0,
+            uptimeSeconds * cpuCount - clampedProcessTicks.toDouble() / clockTicks,
         )
         val uptime = String.format(
             Locale.US,
@@ -142,6 +145,29 @@ class ProcCompatBridge(
             appendLine("memory_available_bytes=${mem.availMem}")
         }
         writeAtomic(paths.hostInfoFile, hostInfo)
+    }
+
+    private fun visibleProcessCpuTicks(): Long {
+        val proc = File("/proc")
+        val entries = proc.listFiles() ?: return 0L
+        var total = 0L
+
+        for (entry in entries) {
+            if (!entry.name.all(Char::isDigit)) continue
+            val line = runCatching { File(entry, "stat").readText() }.getOrNull() ?: continue
+            val commEnd = line.lastIndexOf(')')
+            if (commEnd < 0 || commEnd + 2 >= line.length) continue
+
+            val fields = line.substring(commEnd + 2)
+                .trim()
+                .split(Regex("\\s+"))
+            if (fields.size <= 12) continue
+
+            val user = fields[11].toLongOrNull() ?: continue
+            val system = fields[12].toLongOrNull() ?: continue
+            total += user + system
+        }
+        return total
     }
 
     private fun writeAtomic(target: File, content: String) {
