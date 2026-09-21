@@ -19,6 +19,7 @@ class RuntimeInstaller(
         private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
         private const val BASE_PROVISIONED_MARKER = ".proroot-base-provisioned"
         private const val GRAPHICS_INSTALLED_MARKER = ".proroot-graphics-installed"
+        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v2"
     }
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
@@ -316,6 +317,60 @@ class RuntimeInstaller(
         }
     }
 
+    fun prepareInstalledRuntime() {
+        if (!paths.installMarker.isFile || !paths.rootfs.isDirectory) return
+
+        installGuestScripts(paths.rootfs)
+
+        val marker = File(paths.rootfs, RUNTIME_MAINTENANCE_MARKER)
+        if (marker.isFile) return
+
+        val packages = listOf(
+            "plasma-desktop",
+            "plasma-workspace",
+            "plasma-desktoptheme",
+            "libplasma6",
+            "qml6-module-org-kde-plasma-plasma5support",
+            "kscreen",
+            "kde-config-screenlocker",
+            "plasma-pa",
+            "powerdevil",
+            "xkb-data",
+            "x11-xkb-utils",
+            "libxcb-cursor0",
+        ).joinToString(" ")
+
+        val result = installRunner.exec(
+            command = """
+                set -e
+                missing=''
+                for package in $packages; do
+                    if ! dpkg -s "$package" >/dev/null 2>&1; then
+                        missing="$missing $package"
+                    fi
+                done
+
+                if [ -n "$missing" ]; then
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive                         apt-get install -y --no-install-recommends $missing
+                fi
+
+                dpkg --configure -a
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+            """.trimIndent(),
+            timeoutSeconds = 900,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command("Applying runtime compatibility maintenance", result)
+        check(result.successful) {
+            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
+                "(exit ${result.exitCode}). See diagnostics for full output."
+        }
+
+        marker.writeText("ok\n")
+    }
+
     fun lastFailure(): String? = journal.lastFailure()
 
     fun wasInterrupted(): Boolean = journal.wasInterrupted()
@@ -357,6 +412,7 @@ class RuntimeInstaller(
             val executable = name.startsWith("start-") ||
                 name.startsWith("launch-") ||
                 name.startsWith("set-") ||
+                name == "kwin_wayland_wrapper" ||
                 name.endsWith("-bridge.py")
             Os.chmod(
                 target.absolutePath,
