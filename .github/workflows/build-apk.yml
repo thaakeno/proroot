@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: safe-apt-progress
+# rebuild marker: guest-tar-graphics-overlay
 
 on:
   push:
