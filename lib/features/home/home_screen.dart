@@ -150,9 +150,18 @@ class HomeScreen extends StatelessWidget {
                           children: [
                             Expanded(
                               child: FilledButton.icon(
-                                onPressed: controller.install,
+                                onPressed: snapshot.installed
+                                    ? () {
+                                        onOpenDesktop();
+                                        controller.start();
+                                      }
+                                    : controller.install,
                                 icon: const Icon(Icons.refresh_rounded),
-                                label: const Text('Retry install'),
+                                label: Text(
+                                  snapshot.installed
+                                      ? 'Retry start'
+                                      : 'Retry install',
+                                ),
                               ),
                             ),
                             const SizedBox(width: 10),

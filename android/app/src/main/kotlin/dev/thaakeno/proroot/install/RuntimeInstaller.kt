@@ -27,7 +27,7 @@ class RuntimeInstaller(
         private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
         private const val BASE_PROVISIONED_MARKER = ".proroot-base-provisioned"
         private const val GRAPHICS_INSTALLED_MARKER = ".proroot-graphics-installed"
-        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v4"
+        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v5"
         private const val LINK_TARGETS_FIXED_MARKER = ".proroot-link-targets-v1"
         private const val MIN_HEALTHY_DPKG_PACKAGES = 150
     }
@@ -386,22 +386,23 @@ class RuntimeInstaller(
         }
 
         runMaintenanceStep(
+            stage = "Repairing interrupted packages",
+            timeoutSeconds = 600,
+            command = """
+                set -e
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y
+                dpkg --configure -a
+            """.trimIndent(),
+        )
+        runMaintenanceStep(
             stage = "Refreshing Debian package metadata",
             timeoutSeconds = 300,
             command = """
                 set -e
                 rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
                 apt-get update
-            """.trimIndent(),
-        )
-        runMaintenanceStep(
-            stage = "Repairing interrupted packages",
-            timeoutSeconds = 600,
-            command = """
-                set -e
-                dpkg --configure -a || true
-                DEBIAN_FRONTEND=noninteractive apt-get -f install -y
-                dpkg --configure -a
             """.trimIndent(),
         )
         runMaintenanceStep(

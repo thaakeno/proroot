@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: dpkg-link-recovery-v2
+# rebuild marker: interrupted-dpkg-recovery-v3
 
 on:
   push:
