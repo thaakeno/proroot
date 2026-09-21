@@ -115,6 +115,20 @@ class ProrootRunner(
             ),
         ).start()
 
+    fun startDetachedUser(shellCommand: String, logFile: File): Process {
+        logFile.parentFile?.mkdirs()
+        return command(
+            workingDirectory = "/home/linux",
+            shellCommand = shellCommand,
+            fakeRoot = false,
+            extraEnvironment = mapOf(
+                "PROROOT_LOG_APPEND" to File(paths.logsDir, "proroot-app-runtime.log").absolutePath,
+            ),
+        )
+            .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+            .start()
+    }
+
     private fun hostEnvironment(extra: Map<String, String>): MutableMap<String, String> {
         val env = mutableMapOf(
             "HOME" to context.filesDir.absolutePath,
