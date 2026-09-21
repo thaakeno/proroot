@@ -127,11 +127,33 @@ val prepareProrootLibraries by tasks.registering {
         prorootLibraries.forEach { runtimeLib ->
             val output = File(outDir, runtimeLib.name)
             if (!output.exists() || sha256(output) != runtimeLib.sha256) {
-                output.delete()
-                URL("https://github.com/coderredlab/proroot/releases/download/$prorootVersion/${runtimeLib.name}")
-                    .openStream().buffered().use { input ->
-                        output.outputStream().buffered().use(input::copyTo)
+                val url = URL(
+                    "https://github.com/coderredlab/proroot/releases/download/$prorootVersion/${runtimeLib.name}",
+                )
+                var lastFailure: Throwable? = null
+                for (attempt in 0 until 4) {
+                    try {
+                        output.delete()
+                        url.openConnection().apply {
+                            connectTimeout = 20_000
+                            readTimeout = 60_000
+                        }.getInputStream().buffered().use { input ->
+                            output.outputStream().buffered().use(input::copyTo)
+                        }
+                        check(sha256(output) == runtimeLib.sha256) {
+                            "Checksum failed for ${runtimeLib.name}"
+                        }
+                        lastFailure = null
+                        break
+                    } catch (failure: Throwable) {
+                        lastFailure = failure
+                        output.delete()
+                        if (attempt < 3) Thread.sleep(1_500L * (attempt + 1))
                     }
+                }
+                check(lastFailure == null && output.exists()) {
+                    "Could not fetch verified ${runtimeLib.name}: ${lastFailure?.message}"
+                }
             }
             check(sha256(output) == runtimeLib.sha256) { "Checksum failed for ${runtimeLib.name}" }
         }
