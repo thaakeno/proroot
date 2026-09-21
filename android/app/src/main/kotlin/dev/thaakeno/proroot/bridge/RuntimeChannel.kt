@@ -118,7 +118,21 @@ class RuntimeChannel(
                     call.argument<Boolean>("enabled") == true,
                 ),
             )
-            "diagnostics" -> result.success(engine.diagnostics())
+            "diagnostics" -> scope.launch {
+                runCatching { engine.diagnostics() }
+                    .onSuccess { diagnostics ->
+                        main.post { result.success(diagnostics) }
+                    }
+                    .onFailure { error ->
+                        main.post {
+                            result.error(
+                                "diagnostics_failed",
+                                error.message,
+                                error.stackTraceToString().takeLast(8_000),
+                            )
+                        }
+                    }
+            }
             "setDisplayOptions" -> {
                 val refresh = call.argument<Number>("refreshRate")?.toInt() ?: 120
                 val scale = call.argument<Number>("scale")?.toDouble() ?: 1.0
