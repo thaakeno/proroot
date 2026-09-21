@@ -15,7 +15,10 @@ case "$app_id" in
         exec brave-browser-stable             --no-sandbox             --ozone-platform=wayland             --enable-features=WaylandWindowDecorations
         ;;
     firefox-esr|firefox)
-        exec firefox-esr
+        exec env \
+            MOZ_DISABLE_CONTENT_SANDBOX=1 \
+            MOZ_DISABLE_RDD_SANDBOX=1 \
+            firefox-esr
         ;;
     code|code-url-handler)
         exec code             --no-sandbox             --ozone-platform=wayland             --enable-features=WaylandWindowDecorations

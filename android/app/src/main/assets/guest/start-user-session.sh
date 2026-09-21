@@ -6,7 +6,9 @@ log_dir="$runtime/anland-logs"
 pipewire_config="$runtime/anland-pipewire-config"
 pulse_dir="${PULSE_RUNTIME_PATH:-$runtime/anland-pulse}"
 
-mkdir -p "$log_dir" "$pulse_dir"     "$pipewire_config/pipewire/pipewire.conf.d"     "$pipewire_config/wireplumber/wireplumber.conf.d"
+mkdir -p "$log_dir" "$pulse_dir" \
+    "$pipewire_config/pipewire/pipewire.conf.d" \
+    "$pipewire_config/wireplumber/wireplumber.conf.d"
 
 wait_for_socket() {
     local socket="$1"
@@ -27,6 +29,7 @@ stop_pid() {
 pipewire_pid=""
 wireplumber_pid=""
 pulse_pid=""
+session_pid=""
 
 cleanup_audio() {
     stop_pid "$pulse_pid"
@@ -34,10 +37,15 @@ cleanup_audio() {
     stop_pid "$pipewire_pid"
     rm -f "$runtime/pipewire-0" "$runtime/pipewire-0.lock" "$pulse_dir/native"
 }
-trap cleanup_audio EXIT INT TERM
 
-# Android app UIDs do not map to a conventional login/seat. Make the private
-# PipeWire graph explicitly usable by every process in this one Linux session.
+cleanup_session() {
+    stop_pid "$session_pid"
+    pkill -x startplasma-wayland >/dev/null 2>&1 || true
+    pkill -x plasmashell >/dev/null 2>&1 || true
+    pkill -x kwin_wayland >/dev/null 2>&1 || true
+}
+trap 'cleanup_session; cleanup_audio' EXIT INT TERM
+
 cat >"$pipewire_config/pipewire/pipewire.conf.d/99-proroot-access.conf" <<'EOF'
 module.access.args = {
     access.socket = {
@@ -90,7 +98,8 @@ persist_env() {
         XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
         DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS \
         PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH PULSE_SERVER \
-        QT_QPA_PLATFORM QT_SCALE_FACTOR GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
+        QT_QPA_PLATFORM QML_IMPORT_PATH QML2_IMPORT_PATH QT_SCALE_FACTOR \
+        GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
         ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
         FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS PROROOT_REFRESH_HZ
@@ -101,51 +110,60 @@ persist_env() {
 chmod 0600 "$env_file"
 
 xdg-user-dirs-update >/dev/null 2>&1 || true
-
-# KWin's Android/Anland backend is native Wayland. Do not start Xwayland here:
-# Android's seccomp rejects a syscall in the pinned Xwayland build under proroot.
-# This is the same direct session shape upstream Anland uses for rootless fallback.
-session_pid=""
-cleanup_session() {
-    if [[ -n "$session_pid" ]]; then
-        kill "$session_pid" >/dev/null 2>&1 || true
-    fi
-    pkill -x plasmashell >/dev/null 2>&1 || true
-    pkill -x kwin_wayland >/dev/null 2>&1 || true
-}
-trap 'cleanup_session; cleanup_audio' EXIT INT TERM
-
-# Keep Plasma's classic non-systemd path explicit for helpers started later.
 kwriteconfig6 --file startkderc --group General --key systemdBoot false >/dev/null 2>&1 || true
 
-kwin_wayland plasmashell &
+qml_root="${QML_IMPORT_PATH%%:*}"
+test -f "$qml_root/org/kde/plasma/core/qmldir"
+test -f "$qml_root/org/kde/ksvg/qmldir"
+
+plasma_ready() {
+    pgrep -x kwin_wayland >/dev/null 2>&1 || return 1
+    pgrep -x plasmashell >/dev/null 2>&1 || return 1
+    find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q . || return 1
+    dbus-send \
+        --session \
+        --print-reply=literal \
+        --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus \
+        org.freedesktop.DBus.NameHasOwner \
+        string:org.kde.plasmashell 2>/dev/null | grep -q 'true'
+}
+
+wait_for_plasma() {
+    local attempts="${1:-250}"
+    while [[ "$attempts" -gt 0 ]]; do
+        if [[ -n "$session_pid" ]] && ! kill -0 "$session_pid" >/dev/null 2>&1; then
+            return 1
+        fi
+        if plasma_ready; then
+            return 0
+        fi
+        sleep 0.1
+        attempts=$((attempts - 1))
+    done
+    return 1
+}
+
+# Match upstream Anland's container path first. The direct compositor launch is
+# retained only as a fallback for environments where startplasma-wayland exits.
+startplasma-wayland &
 session_pid=$!
 
-# Wait for the compositor, shell and published Wayland socket. If any one of
-# these never appears, fail the session instead of reporting a fake "Running".
-healthy=0
-for _ in $(seq 1 200); do
-    if ! kill -0 "$session_pid" >/dev/null 2>&1; then
-        break
-    fi
-    if pgrep -x kwin_wayland >/dev/null 2>&1 &&
-       pgrep -x plasmashell >/dev/null 2>&1 &&
-       find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q .; then
-        healthy=1
-        break
-    fi
-    sleep 0.1
-done
+if ! wait_for_plasma 250; then
+    echo "startplasma-wayland did not become healthy; trying direct KWin fallback" >&2
+    cleanup_session
+    session_pid=""
+    rm -f "$runtime"/wayland-* "$runtime"/wayland-*.lock
+    kwin_wayland plasmashell &
+    session_pid=$!
 
-if [[ "$healthy" -ne 1 ]]; then
-    echo "Plasma Wayland compositor did not become healthy" >&2
-    exit 70
+    if ! wait_for_plasma 250; then
+        echo "Plasma Wayland compositor did not become healthy" >&2
+        exit 70
+    fi
 fi
 
-# Optional session helpers. Plasma/DBus will also activate these on demand; starting
-# them here avoids depending on a systemd --user instance that Android does not have.
 command -v kded6 >/dev/null 2>&1 && kded6 >/dev/null 2>&1 &
 command -v krunner >/dev/null 2>&1 && krunner >/dev/null 2>&1 &
 
 wait "$session_pid"
-
