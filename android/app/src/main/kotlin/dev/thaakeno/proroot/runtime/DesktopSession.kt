@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 class DesktopSession(
     private val runner: GuestRunner,
     private val paths: RuntimePaths,
+    private val daemon: AnlandDaemon,
 ) {
     private var process: Process? = null
     private var logThread: Thread? = null
@@ -112,6 +113,17 @@ class DesktopSession(
         if (process?.isAlive != true) {
             return CommandResult(1, "Desktop supervisor is not running")
         }
+
+        val transport = daemon.connectionState()
+        if (!transport.ready) {
+            return CommandResult(
+                1,
+                "Anland transport is not ready: " +
+                    "consumer=${transport.consumerConnected}, " +
+                    "producer=${transport.producerConnected}",
+            )
+        }
+
         return runner.exec(
             command = "/usr/local/lib/proroot/check-desktop-health.sh",
             timeoutSeconds = 6,
