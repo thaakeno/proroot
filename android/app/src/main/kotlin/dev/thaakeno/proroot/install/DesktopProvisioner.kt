@@ -17,7 +17,7 @@ class DesktopProvisioner(
               python3-dbus python3-gi gir1.2-glib-2.0 \
               xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info \
               xdg-desktop-portal xdg-desktop-portal-kde \
-              kde-plasma-desktop plasma-workspace plasma-discover systemsettings \
+              kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin \
               breeze breeze-icon-theme kde-config-gtk-style kio-extras \
               konsole dolphin kate ark okular spectacle gwenview kcalc \
               xwayland libgtk-3-bin \
@@ -79,6 +79,7 @@ class DesktopProvisioner(
             test -x /usr/bin/startplasma-wayland
             test -x /usr/bin/konsole
             test -x /usr/bin/dolphin
+            test -x /usr/bin/kscreen-doctor
             test -x /usr/bin/firefox-esr
             test -x /usr/bin/code
             test -x /usr/bin/brave-browser-stable
