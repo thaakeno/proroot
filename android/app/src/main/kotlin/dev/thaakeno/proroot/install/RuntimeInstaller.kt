@@ -347,9 +347,8 @@ class RuntimeInstaller(
             command = """
                 set -e
                 rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
-                package_count="$(dpkg-query -W -f='${binary:Package}\n' 2>/dev/null | wc -l)"
-                printf 'dpkg package records: %s\n' "$package_count"
-                test "$package_count" -ge $MIN_HEALTHY_DPKG_PACKAGES
+                dpkg-query -W 2>/dev/null | wc -l | sed 's/^/dpkg package records: /'
+                test "$(dpkg-query -W 2>/dev/null | wc -l)" -ge $MIN_HEALTHY_DPKG_PACKAGES
                 dpkg --audit || true
             """.trimIndent(),
             timeoutSeconds = 60,
