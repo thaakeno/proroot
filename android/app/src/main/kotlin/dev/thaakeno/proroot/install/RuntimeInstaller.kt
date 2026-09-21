@@ -287,6 +287,7 @@ class RuntimeInstaller(
         progress: Double,
         message: String,
         downloadedBytes: Long,
+        etaSeconds: Long? = null,
     ): RuntimeStatus = RuntimeStatus(
         phase = phase,
         progress = progress,
@@ -294,6 +295,7 @@ class RuntimeInstaller(
         downloadedBytes = downloadedBytes,
         totalBytes = downloadedBytes,
         speedBytesPerSecond = 0,
+        etaSeconds = etaSeconds,
     )
 
     private fun markerContents(state: String): String =
