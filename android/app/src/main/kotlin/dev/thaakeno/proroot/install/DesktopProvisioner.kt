@@ -1,10 +1,10 @@
 package dev.thaakeno.proroot.install
 
-import dev.thaakeno.proroot.runtime.ProrootRunner
+import dev.thaakeno.proroot.runtime.GuestRunner
 import java.io.File
 
 class DesktopProvisioner(
-    private val runner: ProrootRunner,
+    private val runner: GuestRunner,
     private val desktopUid: Int,
     private val journal: InstallJournal,
 ) {
