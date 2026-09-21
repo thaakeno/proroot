@@ -249,8 +249,7 @@ class DesktopProvisioner(
         )
 
         val command =
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends " +
-                "-o APT::Status-Fd=1 -o Dpkg::Progress-Fancy=0 $packages"
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages"
         val tracker = AptProgressTracker()
 
         journal.commandStart(command)
