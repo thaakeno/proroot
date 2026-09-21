@@ -51,21 +51,46 @@ class RuntimeEngine private constructor(private val context: Context) {
             installer.recoverInterruptedActivation()
         }.exceptionOrNull()
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
+        val lastInstallFailure = installer.lastFailure()
+        val interruptedInstall = installer.wasInterrupted()
 
         RuntimeEvents.publish(
-            if (recoveryFailure == null) {
-                RuntimeStatus(
-                    phase = if (installed) RuntimePhase.ready else RuntimePhase.missing,
-                    message = if (installed) "Ready" else "Linux environment is not installed",
-                    installed = installed,
-                    running = false,
-                )
-            } else {
-                RuntimeStatus(
+            when {
+                recoveryFailure != null -> RuntimeStatus(
                     phase = RuntimePhase.failed,
                     message = "Linux environment recovery failed",
                     detail = recoveryFailure.stackTraceToString().takeLast(16_000),
                     installed = installed,
+                    running = false,
+                )
+                installed -> RuntimeStatus(
+                    phase = RuntimePhase.ready,
+                    progress = 1.0,
+                    message = "Ready",
+                    installed = true,
+                    running = false,
+                )
+                lastInstallFailure != null -> RuntimeStatus(
+                    phase = RuntimePhase.failed,
+                    message = "Last installation failed",
+                    detail = lastInstallFailure.takeLast(16_000),
+                    installed = false,
+                    running = false,
+                )
+                interruptedInstall -> RuntimeStatus(
+                    phase = RuntimePhase.failed,
+                    message = "Previous installation was interrupted",
+                    detail = paths.installLog
+                        .takeIf { it.isFile }
+                        ?.readText()
+                        ?.takeLast(16_000),
+                    installed = false,
+                    running = false,
+                )
+                else -> RuntimeStatus(
+                    phase = RuntimePhase.missing,
+                    message = "Linux environment is not installed",
+                    installed = false,
                     running = false,
                 )
             },
@@ -95,7 +120,8 @@ class RuntimeEngine private constructor(private val context: Context) {
                         RuntimeStatus(
                             phase = RuntimePhase.failed,
                             message = "Installation failed",
-                            detail = t.stackTraceToString().takeLast(16_000),
+                            detail = installer.lastFailure()?.takeLast(16_000)
+                                ?: t.stackTraceToString().takeLast(16_000),
                             installed = paths.installMarker.isFile,
                         ),
                     )
