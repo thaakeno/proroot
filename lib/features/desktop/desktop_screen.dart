@@ -4,8 +4,14 @@ import '../../core/state/runtime_controller.dart';
 import 'native_desktop_view.dart';
 
 class DesktopScreen extends StatefulWidget {
-  const DesktopScreen({required this.controller, super.key});
+  const DesktopScreen({
+    required this.controller,
+    required this.onExitDesktop,
+    super.key,
+  });
+
   final RuntimeController controller;
+  final VoidCallback onExitDesktop;
 
   @override
   State<DesktopScreen> createState() => _DesktopScreenState();
@@ -95,6 +101,12 @@ class _DesktopScreenState extends State<DesktopScreen> {
                         ),
                         IconButton(onPressed: () => _launch('org.kde.konsole.desktop'), color: Colors.white, icon: const Icon(Icons.terminal_rounded)),
                         IconButton(onPressed: () => _launch('brave-browser.desktop'), color: Colors.white, icon: const Icon(Icons.language_rounded)),
+                        IconButton(
+                          tooltip: 'Leave desktop',
+                          onPressed: widget.onExitDesktop,
+                          color: Colors.white,
+                          icon: const Icon(Icons.close_fullscreen_rounded),
+                        ),
                         IconButton(
                           tooltip: 'Hide controls',
                           onPressed: () => setState(() => _controlsVisible = false),
