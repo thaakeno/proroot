@@ -49,10 +49,14 @@ class DesktopProvisioner(
                 packages = """
                     packagekit packagekit-tools upower
                     xdg-desktop-portal xdg-desktop-portal-kde
-                    kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin
+                    kde-plasma-desktop plasma-desktop plasma-workspace plasma-desktoptheme
+                    libplasma6 qml6-module-org-kde-plasma-plasma5support
+                    plasma-discover systemsettings libkscreen-bin kscreen
+                    kde-config-screenlocker plasma-pa powerdevil
                     breeze breeze-icon-theme kde-config-gtk-style kio-extras
                     konsole dolphin kate ark okular kde-spectacle gwenview kcalc
-                    xwayland libgtk-3-bin pipewire pipewire-pulse wireplumber
+                    xwayland xkb-data x11-xkb-utils libxcb-cursor0 libgtk-3-bin
+                    pipewire pipewire-pulse wireplumber
                 """.trimIndent(),
             ),
             PackageGroup(
@@ -372,8 +376,8 @@ class DesktopProvisioner(
     private fun configureDesktop(rootfs: File) {
         runChecked(rootfs, """
             set -e
-            locale-gen en_US.UTF-8
-            update-locale LANG=en_US.UTF-8
+            locale-gen en_US.UTF-8 || true
+            update-locale LANG=C.UTF-8 LC_ALL=C.UTF-8 || true
             chown -R linux:linux /home/linux
 
             install -d -m 0755 /usr/local/bin
