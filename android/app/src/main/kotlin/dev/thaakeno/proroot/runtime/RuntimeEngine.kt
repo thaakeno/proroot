@@ -159,12 +159,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private fun startDesktopOnce() {
         paths.resetTransientState()
         daemon.start()
-        runCatching { systemServices.start() }
-            .onFailure { error ->
-                File(paths.logsDir, "system-services.log").appendText(
-                    "System services unavailable: ${error.stackTraceToString()}\n",
-                )
-            }
+        systemServices.start()
         session.start(refreshRate, scale) { exitCode ->
             if (RuntimeEvents.latest.phase == RuntimePhase.running) {
                 scope.launch {
