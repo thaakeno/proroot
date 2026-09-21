@@ -132,6 +132,9 @@ class RuntimeInstaller(
         extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
         val baseProvisionedMarker = File(staging, BASE_PROVISIONED_MARKER)
+        if (!baseProvisionedMarker.isFile && resumeStaging && isBaseProvisioned(staging)) {
+            baseProvisionedMarker.writeText("adopted\n")
+        }
         if (!baseProvisionedMarker.isFile) {
             provisioner.provisionBase(staging) { stage ->
                 emit(
@@ -220,6 +223,27 @@ class RuntimeInstaller(
             journal.failure(t)
             throw t
         }
+    }
+
+    private fun isBaseProvisioned(staging: File): Boolean {
+        val result = installRunner.exec(
+            command = """
+                set -e
+                test -x /usr/bin/startplasma-wayland
+                test -x /usr/bin/konsole
+                test -x /usr/bin/dolphin
+                test -x /usr/bin/kscreen-doctor
+                test -x /usr/bin/firefox-esr
+                test -x /usr/bin/brave-browser-stable
+                test -x /usr/bin/code
+                test -x /usr/local/lib/proroot/start-desktop.sh
+            """.trimIndent(),
+            timeoutSeconds = 30,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Checking resumable desktop checkpoint", result)
+        return result.successful
     }
 
     private fun installMesaOverlay(
