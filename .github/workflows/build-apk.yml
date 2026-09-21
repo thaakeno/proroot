@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: staged-package-fix-and-progress
+# rebuild marker: validated-installer-recovery
 
 on:
   push:
