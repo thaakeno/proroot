@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-app_id="${1:?desktop id required}"
+scale="${1:?scale required}"
 . /usr/local/lib/proroot/session-env.sh
 load_proroot_session_env
 
-exec gtk-launch "$app_id"
+exec python3 /usr/local/lib/proroot/set-desktop-scale.py "$scale"
