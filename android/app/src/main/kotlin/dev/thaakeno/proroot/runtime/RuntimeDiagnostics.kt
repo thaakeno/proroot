@@ -19,8 +19,7 @@ class RuntimeDiagnostics(
         val logs = paths.logsDir.listFiles()
             ?.filter(File::isFile)
             ?.sortedByDescending(File::lastModified)
-            ?.take(20)
-            ?.associate { it.name to it.readText().takeLast(32_000) }
+            ?.associate { it.name to it.readText() }
             ?: emptyMap()
 
         val probes = if (installed) {
@@ -121,10 +120,19 @@ class RuntimeDiagnostics(
             "desktopProcess" to session.isRunning(),
             "desktopUid" to android.os.Process.myUid(),
             "installedApps" to if (installed) appCatalog.list().size else 0,
+            "installInProgress" to paths.installInProgress.isFile,
+            "stagingRootfsExists" to paths.rootfsStaging.isDirectory,
+            "downloadCacheBytes" to paths.cacheDir
+                .walkTopDown()
+                .filter(File::isFile)
+                .sumOf(File::length),
+            "installLogBytes" to paths.installLog.takeIf { it.isFile }?.length().orZero(),
             "probes" to probes,
             "logs" to logs,
         )
     }
+
+    private fun Long?.orZero(): Long = this ?: 0L
 
     private fun probe(
         command: String,
