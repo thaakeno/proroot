@@ -14,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.thaakeno.proroot"
-        minSdk = 29
+        minSdk = 30
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
