@@ -25,6 +25,9 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     private val inputMethod = context.getSystemService(InputMethodManager::class.java)
 
     private var consumerStarted = false
+    private var surfaceWidth = 0
+    private var surfaceHeight = 0
+    private var surfaceFormat = 0
     private var options = DisplaySettings.current
     private var pointerX = 0f
     private var pointerY = 0f
@@ -59,14 +62,30 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
+
+        if (consumerStarted &&
+            width == surfaceWidth &&
+            height == surfaceHeight &&
+            format == surfaceFormat
+        ) {
+            applyFrameRate(holder.surface, options.refreshRate)
+            return
+        }
+
         if (consumerStarted) Native.nativeStop()
         consumerStarted = false
+        surfaceWidth = width
+        surfaceHeight = height
+        surfaceFormat = format
         startConsumer(holder.surface, width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         if (consumerStarted) Native.nativeStop()
         consumerStarted = false
+        surfaceWidth = 0
+        surfaceHeight = 0
+        surfaceFormat = 0
     }
 
     fun dispose() {
