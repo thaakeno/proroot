@@ -13,14 +13,11 @@ class RuntimePaths(context: Context) {
     val rootfsPrevious = File(machineDir, "rootfs.previous")
     val cacheDir = File(files, "runtime-cache")
     val tmpDir = File(files, "runtime-tmp")
-    val prootLibDir = File(files, "proot-libs")
     val logsDir = File(files, "logs")
     val installLog = File(logsDir, "install.log")
     val previousInstallLog = File(logsDir, "install.previous.log")
     val lastInstallFailure = File(logsDir, "last-install-failure.log")
     val installInProgress = File(machineDir, ".installing")
-    val runtimeModeFile = File(machineDir, ".runtime-mode")
-    val runtimeProbeLog = File(logsDir, "runtime-probe.log")
     val anlandDir = File(files, "anland")
     val anlandSocket = File(anlandDir, "display_daemon.sock")
     val sharedDir = File(files, "shared")
@@ -47,7 +44,6 @@ class RuntimePaths(context: Context) {
             machineDir,
             cacheDir,
             tmpDir,
-            prootLibDir,
             logsDir,
             anlandDir,
             sharedDir,
