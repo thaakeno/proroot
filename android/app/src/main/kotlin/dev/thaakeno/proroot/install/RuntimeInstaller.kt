@@ -14,12 +14,16 @@ class RuntimeInstaller(
     private val paths: RuntimePaths,
     runner: ProrootRunner,
 ) {
+    companion object {
+        private const val INTERNAL_READY_MARKER = ".proroot-runtime-ready"
+    }
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
     private val provisioner = DesktopProvisioner(runner, android.os.Process.myUid())
 
     suspend fun install(onStatus: (RuntimeStatus) -> Unit) {
         paths.ensureHostDirectories()
+        recoverInterruptedActivation()
         ensureFreeSpace()
         val assets = downloads.downloadAll(AssetCatalog.all, onStatus)
         val staging = paths.rootfsStaging
@@ -43,12 +47,11 @@ class RuntimeInstaller(
         onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.88, "Installing pinned Adreno 840 graphics"))
         extractor.extractTarGz(requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY), staging)
         provisioner.finalizeGraphicsAndVerify(staging)
+        File(staging, INTERNAL_READY_MARKER).writeText(markerContents("verified"))
 
         onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.98, "Activating verified Linux environment"))
         activate(staging)
-        paths.installMarker.writeText(
-            "runtime=1\ndevice=${android.os.Build.DEVICE}\nuid=${android.os.Process.myUid()}\nabi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n"
-        )
+        paths.installMarker.writeText(markerContents("active"))
     }
 
     private fun ensureFreeSpace() {
@@ -58,6 +61,25 @@ class RuntimeInstaller(
             val availableGiB = available.toDouble() / 1024.0 / 1024.0 / 1024.0
             "At least 7 GB of free internal storage is required; " +
                 "%.1f GB is currently available".format(availableGiB)
+        }
+    }
+
+    fun recoverInterruptedActivation() {
+        paths.ensureHostDirectories()
+
+        if (!paths.rootfs.exists() && paths.rootfsPrevious.isDirectory) {
+            check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+                "Could not recover previous rootfs after interrupted activation"
+            }
+            if (paths.previousInstallMarker.isFile) {
+                paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
+                paths.previousInstallMarker.delete()
+            }
+        }
+
+        val internalMarker = File(paths.rootfs, INTERNAL_READY_MARKER)
+        if (paths.rootfs.isDirectory && !paths.installMarker.isFile && internalMarker.isFile) {
+            paths.installMarker.writeText(markerContents("recovered"))
         }
     }
 
@@ -75,8 +97,10 @@ class RuntimeInstaller(
         if (paths.previousInstallMarker.isFile) {
             paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
             paths.previousInstallMarker.delete()
+        } else if (File(paths.rootfs, INTERNAL_READY_MARKER).isFile) {
+            paths.installMarker.writeText(markerContents("rollback"))
         } else {
-            paths.installMarker.writeText("runtime=recovered\n")
+            error("Previous rootfs has no verified runtime marker")
         }
         return true
     }
@@ -138,6 +162,15 @@ class RuntimeInstaller(
             throw t
         }
     }
+
+    private fun markerContents(state: String): String =
+        buildString {
+            appendLine("runtime=1")
+            appendLine("state=$state")
+            appendLine("device=${android.os.Build.DEVICE}")
+            appendLine("uid=${android.os.Process.myUid()}")
+            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
+        }
 
     private fun requireAsset(assets: Map<RuntimeAssetKind, File>, kind: RuntimeAssetKind): File =
         assets[kind] ?: error("Missing runtime asset: $kind")
