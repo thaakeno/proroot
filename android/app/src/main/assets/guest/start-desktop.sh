@@ -13,8 +13,11 @@ export SHELL=/bin/bash
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-unset DISPLAY PULSE_SERVER LD_PRELOAD LD_LIBRARY_PATH
+# Never inherit Android/launcher graphics state. The session owns this environment.
+unset DISPLAY PULSE_SERVER PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH
+unset LD_PRELOAD LD_LIBRARY_PATH
 unset ANLAND_NO_DRM_DEVICE ANLAND_DRM_DEVICE EGL_PLATFORM
+unset ANLAND_PIPEWIRE_UNRESTRICTED ANLAND_SOFTWARE_SESSION
 unset MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER
 unset FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS
 
@@ -29,18 +32,27 @@ export XDG_SESSION_DESKTOP=KDE
 export XDG_SESSION_TYPE=wayland
 export QT_QPA_PLATFORM=wayland
 export QT_SCALE_FACTOR="$scale"
+export GDK_BACKEND=wayland,x11
+export SDL_VIDEODRIVER=wayland
+export CLUTTER_BACKEND=wayland
 
 export ANLAND=1
 export ANLAND_SOCKET=/tmp/anland/display_daemon.sock
 export ANLAND_NO_DRM_DEVICE=1
 export ANLAND_PIPEWIRE_UNRESTRICTED=1
-
 export EGL_PLATFORM=surfaceless
-export MESA_LOADER_DRIVER_OVERRIDE=kgsl
-export TURNIP_KMD=kgsl
-export GALLIUM_DRIVER=freedreno
-export FD_FORCE_KGSL=1
-export XWAYLAND_FORCE_KGSL_SURFACELESS=1
+
+if [[ -r /dev/kgsl-3d0 ]]; then
+    export MESA_LOADER_DRIVER_OVERRIDE=kgsl
+    export TURNIP_KMD=kgsl
+    export GALLIUM_DRIVER=freedreno
+    export FD_FORCE_KGSL=1
+    export XWAYLAND_FORCE_KGSL_SURFACELESS=1
+fi
+
 export PROROOT_REFRESH_HZ="$refresh"
+export PIPEWIRE_RUNTIME_DIR="$runtime"
+export PULSE_RUNTIME_PATH="$runtime/anland-pulse"
+export PULSE_SERVER="unix:$PULSE_RUNTIME_PATH/native"
 
 exec dbus-run-session -- /usr/local/lib/proroot/start-user-session.sh

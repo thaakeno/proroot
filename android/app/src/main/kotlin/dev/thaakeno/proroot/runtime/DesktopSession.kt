@@ -28,6 +28,7 @@ class DesktopSession(
             }
         }.apply {
             name = "desktop-session-log"
+            isDaemon = true
             start()
         }
 
@@ -39,28 +40,40 @@ class DesktopSession(
             onExit(code)
         }.apply {
             name = "desktop-session-waiter"
+            isDaemon = true
             start()
         }
 
-        waitForWayland(started)
+        waitForDesktopReady(started)
     }
 
-    private fun waitForWayland(started: Process) {
+    private fun waitForDesktopReady(started: Process) {
         val usersDir = File(paths.rootfs, "run/user")
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        var stableSince = 0L
 
         while (System.nanoTime() < deadline) {
-            check(started.isAlive) { "Plasma exited before creating a Wayland socket" }
+            check(started.isAlive) { "Plasma exited before the desktop became ready" }
+
             val ready = usersDir.listFiles()?.any { runtimeDir ->
-                runtimeDir.listFiles()?.any { file ->
-                    file.name.startsWith("wayland-") && !file.name.endsWith(".lock")
+                val envReady = File(runtimeDir, "proroot-session.env").isFile
+                val socketReady = runtimeDir.listFiles()?.any { file ->
+                    file.name.startsWith("wayland-") &&
+                        !file.name.endsWith(".lock") &&
+                        file.isFile.not()
                 } == true
+                envReady && socketReady
             } == true
 
-            if (ready) return
+            if (ready) {
+                if (stableSince == 0L) stableSince = System.nanoTime()
+                if (System.nanoTime() - stableSince >= TimeUnit.MILLISECONDS.toNanos(500)) return
+            } else {
+                stableSince = 0L
+            }
             Thread.sleep(50)
         }
-        error("Plasma did not create a Wayland socket within 20 seconds")
+        error("Plasma did not publish a stable Wayland session within 30 seconds")
     }
 
     @Synchronized
@@ -69,6 +82,8 @@ class DesktopSession(
         active.destroy()
         if (!active.waitFor(3, TimeUnit.SECONDS)) active.destroyForcibly()
         process = null
+        logThread?.join(500)
+        logThread = null
     }
 
     fun isRunning(): Boolean = process?.isAlive == true
