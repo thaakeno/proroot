@@ -125,7 +125,7 @@ class RuntimeDiagnostics(
             "downloadCacheBytes" to paths.cacheDir
                 .walkTopDown()
                 .filter(File::isFile)
-                .sumOf(File::length),
+                .sumOf { it.length() },
             "installLogBytes" to paths.installLog.takeIf { it.isFile }?.length().orZero(),
             "probes" to probes,
             "logs" to logs,
