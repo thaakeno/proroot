@@ -352,7 +352,37 @@ class RuntimeInstaller(
                 done
 
                 qml_root=/usr/lib/aarch64-linux-gnu/qt6/qml
-                plasma_core="${'
+                plasma_core="${'$'}qml_root/org/kde/plasma/core/qmldir"
+                ksvg_core="${'$'}qml_root/org/kde/ksvg/qmldir"
+
+                needs_qml_repair=0
+                [ -f "${'$'}plasma_core" ] || needs_qml_repair=1
+                [ -f "${'$'}ksvg_core" ] || needs_qml_repair=1
+
+                if [ -n "${'$'}missing" ] || [ "${'$'}needs_qml_repair" = 1 ]; then
+                    rm -f /var/lib/dpkg/status-old /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend || true
+                    apt-get update
+                    DEBIAN_FRONTEND=noninteractive apt-get -f install -y
+                    if [ -n "${'$'}missing" ]; then
+                        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${'$'}missing
+                    fi
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \
+                        plasma-desktoptheme qml6-module-org-kde-ksvg \
+                        qml6-module-org-kde-plasma-plasma5support
+                fi
+
+                test -f "${'$'}plasma_core"
+                test -f "${'$'}ksvg_core"
+                test -r "${'$'}qml_root/org/kde/plasma/core/libcorebindingsplugin.so"
+                test -r "${'$'}qml_root/org/kde/ksvg/libcorebindingsplugin.so"
+
+                rm -rf \
+                    /home/linux/.cache/qmlcache \
+                    /home/linux/.cache/plasmashell \
+                    /home/linux/.cache/plasma* \
+                    /home/linux/.cache/ksycoca6_* 2>/dev/null || true
+                chown -R linux:linux /home/linux/.cache 2>/dev/null || true
+                update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
             """.trimIndent(),
             timeoutSeconds = 900,
             rootfs = paths.rootfs,
@@ -366,7 +396,6 @@ class RuntimeInstaller(
 
         marker.writeText("ok\n")
     }
-
     fun lastFailure(): String? = journal.lastFailure()
 
     fun wasInterrupted(): Boolean = journal.wasInterrupted()
