@@ -2,49 +2,52 @@
 set -euo pipefail
 
 mkdir -p /run/dbus /run/lock
-rm -f /run/dbus/system_bus_socket /run/dbus/pid /run/proroot-upower.ready
+rm -f     /run/dbus/system_bus_socket     /run/dbus/pid     /run/proroot-upower.ready     /run/proroot-login1.ready
 
 dbus_pid=""
 upower_pid=""
+login1_pid=""
 
 cleanup() {
+    if [[ -n "$login1_pid" ]]; then
+        kill "$login1_pid" >/dev/null 2>&1 || true
+    fi
     if [[ -n "$upower_pid" ]]; then
         kill "$upower_pid" >/dev/null 2>&1 || true
     fi
     if [[ -n "$dbus_pid" ]]; then
         kill "$dbus_pid" >/dev/null 2>&1 || true
     fi
-    rm -f /run/proroot-upower.ready /run/dbus/system_bus_socket /run/dbus/pid
+    rm -f         /run/proroot-upower.ready         /run/proroot-login1.ready         /run/dbus/system_bus_socket         /run/dbus/pid
 }
 trap cleanup EXIT INT TERM
 
+wait_for_file() {
+    local file="$1"
+    local pid="$2"
+    local attempts=80
+
+    while [[ ! -e "$file" && "$attempts" -gt 0 ]]; do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+            wait "$pid"
+            return $?
+        fi
+        sleep 0.1
+        attempts=$((attempts - 1))
+    done
+    [[ -e "$file" ]]
+}
+
 dbus-daemon --nofork --nopidfile --config-file=/usr/local/lib/proroot/system-bus.conf &
 dbus_pid=$!
-
-attempts=80
-while [[ ! -S /run/dbus/system_bus_socket && "$attempts" -gt 0 ]]; do
-    if ! kill -0 "$dbus_pid" >/dev/null 2>&1; then
-        wait "$dbus_pid"
-        exit $?
-    fi
-    sleep 0.1
-    attempts=$((attempts - 1))
-done
-
-[[ -S /run/dbus/system_bus_socket ]]
+wait_for_file /run/dbus/system_bus_socket "$dbus_pid"
 
 /usr/local/lib/proroot/host-upower-bridge.py &
 upower_pid=$!
+wait_for_file /run/proroot-upower.ready "$upower_pid"
 
-attempts=80
-while [[ ! -f /run/proroot-upower.ready && "$attempts" -gt 0 ]]; do
-    if ! kill -0 "$upower_pid" >/dev/null 2>&1; then
-        wait "$upower_pid"
-        exit $?
-    fi
-    sleep 0.1
-    attempts=$((attempts - 1))
-done
+/usr/local/lib/proroot/host-login1-bridge.py &
+login1_pid=$!
+wait_for_file /run/proroot-login1.ready "$login1_pid"
 
-[[ -f /run/proroot-upower.ready ]]
 wait "$dbus_pid"

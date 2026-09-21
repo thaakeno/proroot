@@ -7,25 +7,12 @@ import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
 
-HOST_INFO = "/run/proroot-host-info"
+from host_dbus import PropertyObject, read_info, write_ready
+
 READY_FILE = "/run/proroot-upower.ready"
 UPOWER_IFACE = "org.freedesktop.UPower"
 DEVICE_IFACE = "org.freedesktop.UPower.Device"
-PROPS_IFACE = "org.freedesktop.DBus.Properties"
 DISPLAY_PATH = "/org/freedesktop/UPower/devices/DisplayDevice"
-
-
-def read_info():
-    result = {}
-    try:
-        with open(HOST_INFO, "r", encoding="utf-8") as stream:
-            for raw in stream:
-                key, sep, value = raw.rstrip("\n").partition("=")
-                if sep:
-                    result[key] = value
-    except OSError:
-        pass
-    return result
 
 
 def android_state(info):
@@ -33,59 +20,22 @@ def android_state(info):
         status = int(info.get("battery_status", "1"))
     except ValueError:
         status = 1
-    # android.os.BatteryManager BATTERY_STATUS_* -> UPower DeviceState.
     return {
-        2: 1,  # charging
-        3: 2,  # discharging
-        4: 0,  # not charging / unknown
-        5: 4,  # fully charged
+        2: 1,
+        3: 2,
+        4: 0,
+        5: 4,
     }.get(status, 0)
 
 
 def percentage(info):
     try:
-        return max(0.0, min(100.0, float(info.get("battery_percent", "-1"))))
+        value = float(info.get("battery_percent", "-1"))
     except ValueError:
         return 0.0
-
-
-class PropertyObject(dbus.service.Object):
-    interface = ""
-
-    def properties(self):
-        return {}
-
-    @dbus.service.method(PROPS_IFACE, in_signature="ss", out_signature="v")
-    def Get(self, interface_name, property_name):
-        if interface_name != self.interface:
-            raise dbus.exceptions.DBusException(
-                "org.freedesktop.DBus.Error.InvalidArgs",
-                "Unknown interface",
-            )
-        props = self.properties()
-        if property_name not in props:
-            raise dbus.exceptions.DBusException(
-                "org.freedesktop.DBus.Error.InvalidArgs",
-                "Unknown property",
-            )
-        return props[property_name]
-
-    @dbus.service.method(PROPS_IFACE, in_signature="s", out_signature="a{sv}")
-    def GetAll(self, interface_name):
-        if interface_name != self.interface:
-            return {}
-        return self.properties()
-
-    @dbus.service.method(PROPS_IFACE, in_signature="ssv", out_signature="")
-    def Set(self, interface_name, property_name, value):
-        raise dbus.exceptions.DBusException(
-            "org.freedesktop.DBus.Error.PropertyReadOnly",
-            "UPower compatibility properties are read-only",
-        )
-
-    @dbus.service.signal(PROPS_IFACE, signature="sa{sv}as")
-    def PropertiesChanged(self, interface_name, changed, invalidated):
-        pass
+    if value < 0:
+        return 0.0
+    return max(0.0, min(100.0, value))
 
 
 class DisplayDevice(PropertyObject):
@@ -97,12 +47,10 @@ class DisplayDevice(PropertyObject):
 
     def properties(self):
         info = read_info()
-        state = android_state(info)
-        model = info.get("model", "Android device")
         return {
             "NativePath": dbus.String("android-battery"),
             "Vendor": dbus.String(info.get("soc_manufacturer", "Android")),
-            "Model": dbus.String(model),
+            "Model": dbus.String(info.get("model", "Android device")),
             "Serial": dbus.String(""),
             "UpdateTime": dbus.UInt64(int(time.time())),
             "Type": dbus.UInt32(2),
@@ -122,8 +70,8 @@ class DisplayDevice(PropertyObject):
             "TimeToFull": dbus.Int64(0),
             "Percentage": dbus.Double(percentage(info)),
             "Temperature": dbus.Double(0.0),
-            "IsPresent": dbus.Boolean(percentage(info) >= 0.0),
-            "State": dbus.UInt32(state),
+            "IsPresent": dbus.Boolean(True),
+            "State": dbus.UInt32(android_state(info)),
             "IsRechargeable": dbus.Boolean(True),
             "Capacity": dbus.Double(100.0),
             "Technology": dbus.UInt32(0),
@@ -134,11 +82,7 @@ class DisplayDevice(PropertyObject):
 
     def refresh(self):
         current = self.properties()
-        comparable = {
-            key: value
-            for key, value in current.items()
-            if key != "UpdateTime"
-        }
+        comparable = {key: value for key, value in current.items() if key != "UpdateTime"}
         if comparable != self._last:
             self._last = comparable
             self.PropertiesChanged(self.interface, current, [])
@@ -206,12 +150,7 @@ def main():
     )
     display = DisplayDevice(name)
     upower = UPower(name, display)
-
-    try:
-        with open(READY_FILE, "w", encoding="utf-8") as stream:
-            stream.write(str(os.getpid()))
-    except OSError:
-        pass
+    write_ready(READY_FILE)
 
     upower.refresh()
     GLib.timeout_add_seconds(1, upower.refresh)
