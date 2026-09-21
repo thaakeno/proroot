@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
+import '../models/linux_app.dart';
 import '../models/runtime_snapshot.dart';
 
 class RuntimeBridge {
@@ -25,8 +26,29 @@ class RuntimeBridge {
     return (await _method.invokeMethod<String>('exec', {'command': command})) ?? '';
   }
 
+  Future<List<LinuxApp>> desktopApps() async {
+    final raw = await _method.invokeListMethod<dynamic>('desktopApps') ?? const [];
+    return raw
+        .whereType<Map>()
+        .map((value) => LinuxApp.fromMap(value))
+        .where((app) => app.id.isNotEmpty && app.name.isNotEmpty)
+        .toList(growable: false);
+  }
+
   Future<void> launchDesktopApp(String desktopId) {
     return _method.invokeMethod<void>('launchDesktopApp', {'desktopId': desktopId});
+  }
+
+  Future<bool> showKeyboard() async {
+    return await _method.invokeMethod<bool>('showKeyboard') ?? false;
+  }
+
+  Future<bool> setPointerCapture(bool enabled) async {
+    return await _method.invokeMethod<bool>(
+          'setPointerCapture',
+          {'enabled': enabled},
+        ) ??
+        false;
   }
 
   Future<Map<String, dynamic>> diagnostics() async {

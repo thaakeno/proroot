@@ -8,11 +8,12 @@ class LinuxDisplayView(
     context: Context,
     @Suppress("UNUSED_PARAMETER") viewId: Int,
 ) : PlatformView {
-    private val surface = LinuxSurfaceView(context)
+    private val surface = LinuxSurfaceView(context).also(LinuxDisplayRegistry::attach)
 
     override fun getView(): View = surface
 
     override fun dispose() {
+        LinuxDisplayRegistry.detach(surface)
         surface.dispose()
     }
 }

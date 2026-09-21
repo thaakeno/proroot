@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import dev.thaakeno.proroot.display.DisplaySettings
+import dev.thaakeno.proroot.display.LinuxDisplayRegistry
 import dev.thaakeno.proroot.runtime.RuntimeEngine
 import dev.thaakeno.proroot.runtime.RuntimeEvents
 import dev.thaakeno.proroot.runtime.RuntimeStatus
@@ -28,7 +29,7 @@ class RuntimeChannel(
 
     private var sink: EventChannel.EventSink? = null
     private val statusListener: (RuntimeStatus) -> Unit = { status ->
-        sink?.success(status.asMap())
+        main.post { sink?.success(status.asMap()) }
     }
 
     fun attach() {
@@ -46,6 +47,7 @@ class RuntimeChannel(
     override fun onListen(arguments: Any?, eventSink: EventChannel.EventSink) {
         sink = eventSink
         RuntimeEvents.add(statusListener)
+        eventSink.success(engine.status().asMap())
     }
 
     override fun onCancel(arguments: Any?) {
@@ -95,6 +97,11 @@ class RuntimeChannel(
                         }
                 }
             }
+            "desktopApps" -> scope.launch {
+                runCatching { engine.desktopApps() }
+                    .onSuccess { apps -> main.post { result.success(apps) } }
+                    .onFailure { error -> main.post { result.error("apps_failed", error.message, null) } }
+            }
             "launchDesktopApp" -> {
                 val desktopId = call.argument<String>("desktopId")
                 if (desktopId.isNullOrBlank()) {
@@ -105,6 +112,12 @@ class RuntimeChannel(
                         .onFailure { result.error("launch_failed", it.message, null) }
                 }
             }
+            "showKeyboard" -> result.success(LinuxDisplayRegistry.showKeyboard())
+            "setPointerCapture" -> result.success(
+                LinuxDisplayRegistry.setPointerCapture(
+                    call.argument<Boolean>("enabled") == true,
+                ),
+            )
             "diagnostics" -> result.success(engine.diagnostics())
             "setPerformanceProfile" -> {
                 engine.setPerformanceProfile(

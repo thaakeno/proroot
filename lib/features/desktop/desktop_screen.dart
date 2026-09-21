@@ -11,6 +11,13 @@ class DesktopScreen extends StatefulWidget {
 
 class _DesktopScreenState extends State<DesktopScreen> {
   bool _controlsVisible = true;
+  bool _pointerCaptured = false;
+
+  Future<void> _togglePointerCapture() async {
+    final next = !_pointerCaptured;
+    final changed = await widget.controller.setPointerCapture(next);
+    if (changed && mounted) setState(() => _pointerCaptured = next);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +61,7 @@ class _DesktopScreenState extends State<DesktopScreen> {
           AnimatedPositioned(
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
-            top: _controlsVisible ? 12 : -72,
+            top: _controlsVisible ? 12 : -76,
             left: 12,
             right: 12,
             child: IgnorePointer(
@@ -62,22 +69,42 @@ class _DesktopScreenState extends State<DesktopScreen> {
               child: SafeArea(
                 child: Center(
                   child: Container(
-                    constraints: const BoxConstraints(maxWidth: 560),
-                    padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                    constraints: const BoxConstraints(maxWidth: 680),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
                     decoration: BoxDecoration(
                       color: const Color(0xE614171D),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(22),
                       border: Border.all(color: Colors.white12),
+                      boxShadow: const [
+                        BoxShadow(blurRadius: 28, offset: Offset(0, 10), color: Color(0x55000000)),
+                      ],
                     ),
                     child: Row(
                       children: [
-                        const SizedBox(width: 8),
                         const Icon(Icons.circle, size: 10, color: Color(0xFF6EE7A6)),
-                        const SizedBox(width: 8),
-                        const Expanded(child: Text('Debian 13 · Plasma', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700))),
+                        const SizedBox(width: 9),
+                        const Expanded(
+                          child: Text(
+                            'Debian 13 · Plasma',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Keyboard',
+                          onPressed: widget.controller.showKeyboard,
+                          color: Colors.white,
+                          icon: const Icon(Icons.keyboard_rounded),
+                        ),
+                        IconButton(
+                          tooltip: _pointerCaptured ? 'Release mouse' : 'Capture mouse',
+                          onPressed: _togglePointerCapture,
+                          color: _pointerCaptured ? const Color(0xFF8DDBFF) : Colors.white,
+                          icon: Icon(_pointerCaptured ? Icons.mouse_rounded : Icons.mouse_outlined),
+                        ),
                         IconButton(onPressed: () => _launch('org.kde.konsole.desktop'), color: Colors.white, icon: const Icon(Icons.terminal_rounded)),
                         IconButton(onPressed: () => _launch('brave-browser.desktop'), color: Colors.white, icon: const Icon(Icons.language_rounded)),
-                        IconButton(onPressed: () => _launch('firefox-esr.desktop'), color: Colors.white, icon: const Icon(Icons.public_rounded)),
                         IconButton(onPressed: widget.controller.stop, color: Colors.white, icon: const Icon(Icons.stop_rounded)),
                       ],
                     ),
@@ -92,6 +119,13 @@ class _DesktopScreenState extends State<DesktopScreen> {
   }
 
   Future<void> _launch(String desktopId) async {
-    await widget.controller.bridge.launchDesktopApp(desktopId);
+    try {
+      await widget.controller.launchApp(desktopId);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not launch app: $error')),
+      );
+    }
   }
 }

@@ -29,6 +29,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val daemon = AnlandDaemon(context, paths)
     private val session = DesktopSession(runner, paths)
     private val installer = RuntimeInstaller(context, paths, runner)
+    private val appCatalog = DesktopAppCatalog(paths)
 
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
@@ -179,15 +180,23 @@ class RuntimeEngine private constructor(private val context: Context) {
         return runner.exec(command)
     }
 
+    fun desktopApps(): List<Map<String, Any?>> = appCatalog.list().map(DesktopApp::asMap)
+
     fun launchDesktopApp(desktopId: String) {
         require(desktopId.matches(Regex("[A-Za-z0-9._+-]+"))) { "Invalid desktop id" }
+        check(session.isRunning()) { "Linux desktop is not running" }
         scope.launch {
             val appId = desktopId.removeSuffix(".desktop")
-            runner.exec(
+            val result = runner.exec(
                 command = "/usr/local/lib/proroot/launch-desktop-app.sh '$appId'",
                 timeoutSeconds = 30,
                 fakeRoot = false,
             )
+            if (!result.successful) {
+                File(paths.logsDir, "app-launch.log").appendText(
+                    "[$desktopId] exit=${result.exitCode}\n${result.output}\n",
+                )
+            }
         }
     }
 
@@ -205,7 +214,9 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     fun diagnostics(): Map<String, Any?> {
         val logFiles = paths.logsDir.listFiles()
+            ?.filter(File::isFile)
             ?.sortedByDescending(File::lastModified)
+            ?.take(20)
             ?.associate { it.name to it.readText().takeLast(32_000) }
             ?: emptyMap()
         return mapOf(
@@ -217,6 +228,7 @@ class RuntimeEngine private constructor(private val context: Context) {
             "desktopProcess" to session.isRunning(),
             "desktopUid" to android.os.Process.myUid(),
             "performanceProfile" to performanceProfile,
+            "installedApps" to if (paths.installMarker.isFile) appCatalog.list().size else 0,
             "logs" to logFiles,
         )
     }

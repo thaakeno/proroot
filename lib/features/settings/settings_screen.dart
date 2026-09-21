@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/state/runtime_controller.dart';
+import '../diagnostics/diagnostics_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({required this.controller, super.key});
@@ -83,6 +84,19 @@ class SettingsScreen extends StatelessWidget {
                     value: controller.darkMode,
                     title: const Text('Dark mode'),
                     onChanged: controller.setDarkMode,
+                  ),
+                  const Divider(),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.monitor_heart_outlined),
+                    title: const Text('Diagnostics'),
+                    subtitle: const Text('Runtime state, display transport and logs'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => DiagnosticsScreen(controller: controller),
+                      ),
+                    ),
                   ),
                 ],
               ),

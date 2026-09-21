@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/linux_app.dart';
 import '../models/runtime_snapshot.dart';
 import '../platform/runtime_bridge.dart';
 
@@ -9,6 +10,7 @@ class RuntimeController extends ChangeNotifier {
 
   final RuntimeBridge bridge;
   StreamSubscription<RuntimeSnapshot>? _subscription;
+  Completer<void>? _runningCompleter;
   RuntimeSnapshot snapshot = const RuntimeSnapshot.initial();
 
   bool darkMode = true;
@@ -36,11 +38,22 @@ class RuntimeController extends ChangeNotifier {
 
     _subscription = bridge.events.listen((next) {
       snapshot = next;
+      if (next.running) {
+        final pending = _runningCompleter;
+        if (pending != null && !pending.isCompleted) pending.complete();
+      } else if (next.phase == RuntimePhase.failed) {
+        final pending = _runningCompleter;
+        if (pending != null && !pending.isCompleted) {
+          pending.completeError(StateError(next.detail ?? next.message));
+        }
+      }
       notifyListeners();
     });
 
     try {
       snapshot = await bridge.status();
+      await _pushDisplayOptions();
+      await bridge.setPerformanceProfile(performanceProfile);
     } catch (_) {
       snapshot = snapshot.copyWith(
         phase: RuntimePhase.failed,
@@ -59,6 +72,29 @@ class RuntimeController extends ChangeNotifier {
     snapshot = await bridge.status();
     notifyListeners();
   }
+
+  Future<List<LinuxApp>> desktopApps() => bridge.desktopApps();
+
+  Future<void> launchApp(String desktopId) async {
+    if (!snapshot.installed) {
+      throw StateError('Linux is not installed');
+    }
+
+    if (!snapshot.running) {
+      _runningCompleter = Completer<void>();
+      await bridge.start();
+      await _runningCompleter!.future.timeout(const Duration(seconds: 35));
+      _runningCompleter = null;
+    }
+
+    await bridge.launchDesktopApp(desktopId);
+  }
+
+  Future<void> showKeyboard() async {
+    await bridge.showKeyboard();
+  }
+
+  Future<bool> setPointerCapture(bool enabled) => bridge.setPointerCapture(enabled);
 
   Future<void> setDarkMode(bool value) async {
     darkMode = value;
@@ -110,6 +146,10 @@ class RuntimeController extends ChangeNotifier {
   @override
   void dispose() {
     _subscription?.cancel();
+    final pending = _runningCompleter;
+    if (pending != null && !pending.isCompleted) {
+      pending.completeError(StateError('Runtime controller disposed'));
+    }
     super.dispose();
   }
 }

@@ -48,8 +48,8 @@ class HomeScreen extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Debian 13 · KDE Plasma', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-                              Text(snapshot.running ? 'Running on Adreno 840' : snapshot.message),
+                              Text('Debian 13 · KDE Plasma', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                              Text(snapshot.running ? 'Running · direct Adreno 840 graphics' : snapshot.message),
                             ],
                           ),
                         ),
@@ -98,9 +98,9 @@ class HomeScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 22),
-              Text('Ready when Linux starts', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+              Text('Quick launch', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 12),
-              const _AppGrid(),
+              _AppGrid(controller: controller, onOpenDesktop: onOpenDesktop),
               const SizedBox(height: 22),
               Card(
                 child: Padding(
@@ -113,7 +113,7 @@ class HomeScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Native ARM64 userspace', style: TextStyle(fontWeight: FontWeight.w700)),
+                            const Text('Native ARM64 userspace', style: TextStyle(fontWeight: FontWeight.w800)),
                             Text('No CPU emulation. Freedreno/Turnip talks directly to KGSL.', style: TextStyle(color: scheme.onSurfaceVariant)),
                           ],
                         ),
@@ -147,7 +147,7 @@ class _Metric extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 2),
             Text(label, style: Theme.of(context).textTheme.labelSmall),
           ],
@@ -158,15 +158,18 @@ class _Metric extends StatelessWidget {
 }
 
 class _AppGrid extends StatelessWidget {
-  const _AppGrid();
+  const _AppGrid({required this.controller, required this.onOpenDesktop});
+
+  final RuntimeController controller;
+  final VoidCallback onOpenDesktop;
 
   static const apps = [
-    (Icons.language_rounded, 'Brave'),
-    (Icons.public_rounded, 'Firefox'),
-    (Icons.terminal_rounded, 'Konsole'),
-    (Icons.code_rounded, 'VS Code'),
-    (Icons.folder_rounded, 'Dolphin'),
-    (Icons.edit_note_rounded, 'Kate'),
+    (Icons.language_rounded, 'Brave', 'brave-browser.desktop'),
+    (Icons.public_rounded, 'Firefox', 'firefox-esr.desktop'),
+    (Icons.terminal_rounded, 'Konsole', 'org.kde.konsole.desktop'),
+    (Icons.code_rounded, 'VS Code', 'code.desktop'),
+    (Icons.folder_rounded, 'Dolphin', 'org.kde.dolphin.desktop'),
+    (Icons.edit_note_rounded, 'Kate', 'org.kde.kate.desktop'),
   ];
 
   @override
@@ -184,9 +187,21 @@ class _AppGrid extends StatelessWidget {
       itemBuilder: (context, index) {
         final item = apps[index];
         return Card(
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
-            borderRadius: BorderRadius.circular(24),
-            onTap: () {},
+            onTap: controller.snapshot.installed
+                ? () async {
+                    try {
+                      await controller.launchApp(item.$3);
+                      onOpenDesktop();
+                    } catch (error) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Could not launch ${item.$2}: $error')),
+                      );
+                    }
+                  }
+                : null,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -194,7 +209,7 @@ class _AppGrid extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Icon(item.$1),
-                  Text(item.$2, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text(item.$2, style: const TextStyle(fontWeight: FontWeight.w800)),
                 ],
               ),
             ),

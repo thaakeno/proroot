@@ -119,6 +119,13 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         inputMethod.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 
+    fun setPointerCaptureEnabled(enabled: Boolean) {
+        requestFocus()
+        if (enabled) requestPointerCapture() else releasePointerCapture()
+    }
+
+    override fun onCapturedPointerEvent(event: MotionEvent): Boolean = handleMouse(event)
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
         sendHardwareKey(event, 0) || super.onKeyDown(keyCode, event)
 
