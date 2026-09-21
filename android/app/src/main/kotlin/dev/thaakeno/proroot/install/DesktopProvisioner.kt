@@ -25,28 +25,30 @@ class DesktopProvisioner(
         prepareConfiguration(rootfs)
         runChecked(rootfs, "apt-get update")
 
+        val baseGroup = PackageGroup(
+            start = 0.50,
+            end = 0.56,
+            message = "Installing Debian base services",
+            expectedSeconds = 70,
+            etaAfterSeconds = 500,
+            packages = """
+                ca-certificates curl wget gnupg locales sudo util-linux
+                dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec
+                python3-dbus python3-gi gir1.2-glib-2.0
+                xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info
+            """.trimIndent(),
+        )
+
         val packageGroups = listOf(
             PackageGroup(
-                start = 0.50,
-                end = 0.56,
-                message = "Installing Debian base services",
-                expectedSeconds = 90,
-                etaAfterSeconds = 770,
-                packages = """
-                    ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux
-                    dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower
-                    python3-dbus python3-gi gir1.2-glib-2.0
-                    xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info
-                    xdg-desktop-portal xdg-desktop-portal-kde
-                """.trimIndent(),
-            ),
-            PackageGroup(
-                start = 0.56,
-                end = 0.64,
+                start = 0.58,
+                end = 0.72,
                 message = "Installing KDE Plasma desktop",
-                expectedSeconds = 220,
-                etaAfterSeconds = 550,
+                expectedSeconds = 190,
+                etaAfterSeconds = 310,
                 packages = """
+                    packagekit packagekit-tools upower
+                    xdg-desktop-portal xdg-desktop-portal-kde
                     kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin
                     breeze breeze-icon-theme kde-config-gtk-style kio-extras
                     konsole dolphin kate ark okular kde-spectacle gwenview kcalc
@@ -54,42 +56,42 @@ class DesktopProvisioner(
                 """.trimIndent(),
             ),
             PackageGroup(
-                start = 0.64,
-                end = 0.70,
-                message = "Installing desktop applications",
-                expectedSeconds = 160,
-                etaAfterSeconds = 390,
+                start = 0.72,
+                end = 0.80,
+                message = "Installing browsers and desktop apps",
+                expectedSeconds = 130,
+                etaAfterSeconds = 180,
                 packages = """
-                    fonts-noto fonts-noto-cjk fonts-noto-color-emoji fonts-liberation
-                    firefox-esr mesa-utils vulkan-tools glmark2
-                    libreoffice gimp vlc
+                    fonts-noto-core fonts-noto-color-emoji fonts-liberation
+                    firefox-esr brave-browser code
+                    mesa-utils vulkan-tools
                 """.trimIndent(),
             ),
             PackageGroup(
-                start = 0.70,
-                end = 0.74,
-                message = "Installing development tools",
-                expectedSeconds = 100,
-                etaAfterSeconds = 290,
+                start = 0.80,
+                end = 0.84,
+                message = "Installing essential tools",
+                expectedSeconds = 70,
+                etaAfterSeconds = 110,
                 packages = """
-                    build-essential cmake pkg-config python3 python3-pip nodejs npm
-                    git openssh-client rsync file procps iproute2 net-tools jq ripgrep fd-find
-                    htop nano vim less unzip xz-utils
+                    python3-pip git openssh-client rsync file procps iproute2
+                    jq ripgrep fd-find htop nano vim less unzip xz-utils
                 """.trimIndent(),
             ),
         )
 
-        val allPackages = packageGroups
+        val debianPackages = (listOf(baseGroup) + packageGroups)
             .flatMap { group -> group.packages.split(Regex("\\s+")) }
-            .filter { it.isNotBlank() }
+            .filter { it.isNotBlank() && it != "brave-browser" && it != "code" }
+            .distinct()
             .joinToString(" ")
 
-        onProgress(ProvisioningStage(0.49, "Validating Debian desktop packages", 860))
+        onProgress(ProvisioningStage(0.49, "Validating Debian package set", 570))
         runChecked(
             rootfs,
             """
             set -e
-            packages='$allPackages'
+            packages='$debianPackages'
             missing=''
             for package in ${'$'}packages; do
                 if ! apt-cache show "${'$'}package" >/dev/null 2>&1; then
@@ -103,11 +105,27 @@ class DesktopProvisioner(
             """.trimIndent(),
         )
 
+        installPackageGroup(rootfs, baseGroup, onProgress)
+
+        onProgress(ProvisioningStage(0.56, "Configuring Brave and VS Code repositories", 500))
+        configureAppRepositories(rootfs)
+
+        onProgress(ProvisioningStage(0.57, "Validating external application repositories", 480))
+        runChecked(
+            rootfs,
+            """
+            set -e
+            apt-get update
+            apt-cache show brave-browser >/dev/null 2>&1
+            apt-cache show code >/dev/null 2>&1
+            """.trimIndent(),
+        )
+
         packageGroups.forEach { group ->
             installPackageGroup(rootfs, group, onProgress)
         }
 
-        onProgress(ProvisioningStage(0.75, "Creating persistent Linux desktop user", 270))
+        onProgress(ProvisioningStage(0.85, "Creating persistent Linux desktop user", 100))
         runChecked(rootfs, """
             set -e
 
@@ -140,28 +158,22 @@ class DesktopProvisioner(
             update-mime-database /usr/share/mime || true
         """.trimIndent())
 
-        onProgress(ProvisioningStage(0.77, "Normalizing staged ARM64 packages", 260))
+        onProgress(ProvisioningStage(0.86, "Normalizing staged ARM64 packages", 90))
         runChecked(
             rootfs,
             "/bin/bash /usr/local/lib/proroot/normalize-staged-debs.sh /opt/proroot-packages",
         )
 
-        onProgress(ProvisioningStage(0.78, "Installing Anland, KWin and XWayland", 250))
+        onProgress(ProvisioningStage(0.87, "Installing Anland, KWin and XWayland", 80))
         installPinnedDesktopStack(rootfs)
 
-        onProgress(ProvisioningStage(0.82, "Installing Brave Browser", 200))
-        installBrave(rootfs)
-
-        onProgress(ProvisioningStage(0.85, "Installing Visual Studio Code", 160))
-        installVsCode(rootfs)
-
-        onProgress(ProvisioningStage(0.88, "Configuring rootless desktop services", 100))
+        onProgress(ProvisioningStage(0.91, "Configuring rootless desktop services", 50))
         rootlessServices.configure(rootfs)
 
-        onProgress(ProvisioningStage(0.90, "Configuring the Linux desktop", 75))
+        onProgress(ProvisioningStage(0.92, "Configuring the Linux desktop", 35))
         configureDesktop(rootfs)
 
-        onProgress(ProvisioningStage(0.91, "Protecting the verified graphics stack", 55))
+        onProgress(ProvisioningStage(0.93, "Protecting the verified graphics stack", 25))
         protectGraphicsStack(rootfs)
     }
 
