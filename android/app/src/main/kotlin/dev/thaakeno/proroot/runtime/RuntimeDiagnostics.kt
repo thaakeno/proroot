@@ -127,6 +127,14 @@ class RuntimeDiagnostics(
                 .walkTopDown()
                 .filter(File::isFile)
                 .sumOf { it.length() },
+            "aptArchiveCacheBytes" to paths.aptArchivesDir
+                .walkTopDown()
+                .filter(File::isFile)
+                .sumOf { it.length() },
+            "stagingResumeMarker" to File(
+                paths.rootfsStaging,
+                ".proroot-staging-resumable",
+            ).isFile,
             "installLogBytes" to paths.installLog.takeIf { it.isFile }?.length().orZero(),
             "probes" to probes,
             "logs" to logs,
