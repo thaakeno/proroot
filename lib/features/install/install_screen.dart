@@ -23,12 +23,18 @@ class InstallScreen extends StatelessWidget {
   String _eta(RuntimeSnapshot snapshot) {
     final speed = snapshot.speedBytesPerSecond;
     final remaining = snapshot.totalBytes - snapshot.downloadedBytes;
-    if (speed <= 0 || remaining <= 0) {\n      return '';\n    }
+    if (speed <= 0 || remaining <= 0) {
+      return '';
+    }
 
     final seconds = (remaining / speed).ceil();
-    if (seconds < 60) {\n      return '~${seconds}s left';\n    }
+    if (seconds < 60) {
+      return '~${seconds}s left';
+    }
     final minutes = (seconds / 60).ceil();
-    if (minutes < 60) {\n      return '~${minutes}m left';\n    }
+    if (minutes < 60) {
+      return '~${minutes}m left';
+    }
     final hours = seconds ~/ 3600;
     final restMinutes = ((seconds % 3600) / 60).ceil();
     return '~${hours}h ${restMinutes}m left';
