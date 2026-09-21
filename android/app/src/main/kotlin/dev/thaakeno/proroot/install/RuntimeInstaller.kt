@@ -30,10 +30,34 @@ class RuntimeInstaller(
         paths.ensureHostDirectories()
         recoverInterruptedActivation()
         journal.begin()
+        val installStartedAtMs = System.currentTimeMillis()
 
         fun emit(status: RuntimeStatus) {
-            journal.status(status)
-            onStatus(status)
+            val elapsedSeconds = ((System.currentTimeMillis() - installStartedAtMs) / 1000L)
+                .coerceAtLeast(0L)
+            val fullEta = status.etaSeconds ?: when (status.phase) {
+                RuntimePhase.downloading -> {
+                    if (status.speedBytesPerSecond > 0 &&
+                        status.totalBytes > status.downloadedBytes
+                    ) {
+                        ((status.totalBytes - status.downloadedBytes) /
+                            status.speedBytesPerSecond) + 900L
+                    } else {
+                        900L
+                    }
+                }
+                RuntimePhase.extracting -> 900L
+                RuntimePhase.provisioning -> ((1.0 - status.progress)
+                    .coerceAtLeast(0.0) * 1_500.0).toLong()
+                else -> null
+            }
+
+            val enriched = status.copy(
+                elapsedSeconds = elapsedSeconds,
+                etaSeconds = fullEta,
+            )
+            journal.status(enriched)
+            onStatus(enriched)
         }
 
         try {
@@ -84,6 +108,7 @@ class RuntimeInstaller(
                     progress = stage.progress,
                     message = stage.message,
                     downloadedBytes = totalDownloadBytes,
+                    etaSeconds = stage.etaSeconds,
                 ),
             )
         }
@@ -91,8 +116,9 @@ class RuntimeInstaller(
         emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
-                progress = 0.89,
+                progress = 0.92,
                 message = "Installing pinned Adreno 840 graphics",
+                etaSeconds = 45,
                 downloadedBytes = totalDownloadBytes,
             ),
         )
@@ -101,8 +127,9 @@ class RuntimeInstaller(
         emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
-                progress = 0.94,
+                progress = 0.96,
                 message = "Verifying GPU and desktop compatibility",
+                etaSeconds = 30,
                 downloadedBytes = totalDownloadBytes,
             ),
         )
@@ -112,8 +139,9 @@ class RuntimeInstaller(
         emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
-                progress = 0.98,
+                progress = 0.99,
                 message = "Activating verified Linux environment",
+                etaSeconds = 5,
                 downloadedBytes = totalDownloadBytes,
             ),
         )
