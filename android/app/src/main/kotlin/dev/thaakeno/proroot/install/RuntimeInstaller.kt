@@ -8,8 +8,6 @@ import dev.thaakeno.proroot.runtime.RuntimePaths
 import dev.thaakeno.proroot.runtime.RuntimePhase
 import dev.thaakeno.proroot.runtime.RuntimeStatus
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Path
 
 class RuntimeInstaller(
     private val context: Context,
@@ -36,12 +34,10 @@ class RuntimeInstaller(
         packageDir.mkdirs()
         stagePackage(requireAsset(assets, RuntimeAssetKind.ANLAND_GUEST), File(packageDir, "anland/anland.deb"))
         stagePackage(requireAsset(assets, RuntimeAssetKind.XWAYLAND_PACKAGE), File(packageDir, "xwayland/xwayland.deb"))
+        stagePackage(requireAsset(assets, RuntimeAssetKind.BRAVE), File(packageDir, "brave/brave.deb"))
         extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
-        onStatus(RuntimeStatus(RuntimePhase.extracting, 0.40, "Installing Brave"))
-        installBrave(staging, requireAsset(assets, RuntimeAssetKind.BRAVE))
-
-        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.55, "Installing KDE Plasma and applications"))
+        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.50, "Installing KDE Plasma and applications"))
         provisioner.provisionBase(staging)
 
         onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.88, "Installing pinned Adreno 840 graphics"))
@@ -97,43 +93,6 @@ class RuntimeInstaller(
                 target.outputStream().use { output -> input.copyTo(output) }
             }
             Os.chmod(target.absolutePath, 0x1ED)
-        }
-    }
-
-    private fun installBrave(rootfs: File, archive: File) {
-        val braveDir = File(rootfs, "opt/brave")
-        braveDir.deleteRecursively()
-        extractor.extractZip(archive, braveDir)
-
-        val binary = braveDir.walkTopDown()
-            .firstOrNull { file -> file.isFile && (file.name == "brave" || file.name == "brave-browser") }
-            ?: error("Brave archive does not contain the browser executable")
-
-        braveDir.walkTopDown()
-            .filter { file ->
-                file.isFile && file.name in setOf("brave", "brave-browser", "chrome-sandbox", "chrome_crashpad_handler")
-            }
-            .forEach { file -> runCatching { Os.chmod(file.absolutePath, 0x1ED) } }
-
-        val link = File(rootfs, "usr/local/bin/brave-browser")
-        link.parentFile?.mkdirs()
-        link.delete()
-        val guestBinary = binary.absolutePath.removePrefix(rootfs.absolutePath)
-        Files.createSymbolicLink(link.toPath(), Path.of(guestBinary))
-
-        File(rootfs, "usr/share/applications/brave-browser.desktop").apply {
-            parentFile?.mkdirs()
-            writeText("""
-                [Desktop Entry]
-                Type=Application
-                Name=Brave Browser
-                GenericName=Web Browser
-                Exec=/usr/local/bin/brave-browser %U
-                Terminal=false
-                Categories=Network;WebBrowser;
-                MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
-                StartupNotify=true
-            """.trimIndent() + "\n")
         }
     }
 
