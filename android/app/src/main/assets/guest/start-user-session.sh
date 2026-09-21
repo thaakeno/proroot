@@ -144,23 +144,13 @@ wait_for_plasma() {
     return 1
 }
 
-# Match upstream Anland's container path first. The direct compositor launch is
-# retained only as a fallback for environments where startplasma-wayland exits.
+# One canonical desktop path. If Plasma cannot become healthy, fail loudly.
 startplasma-wayland &
 session_pid=$!
 
 if ! wait_for_plasma 250; then
-    echo "startplasma-wayland did not become healthy; trying direct KWin fallback" >&2
-    cleanup_session
-    session_pid=""
-    rm -f "$runtime"/wayland-* "$runtime"/wayland-*.lock
-    kwin_wayland plasmashell &
-    session_pid=$!
-
-    if ! wait_for_plasma 250; then
-        echo "Plasma Wayland compositor did not become healthy" >&2
-        exit 70
-    fi
+    echo "startplasma-wayland did not become healthy" >&2
+    exit 70
 fi
 
 command -v kded6 >/dev/null 2>&1 && kded6 >/dev/null 2>&1 &
