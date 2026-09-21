@@ -29,7 +29,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val installRunner = InstallProotRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
     private val systemServices = SystemServicesSession(runner, paths)
-    private val session = DesktopSession(runner, paths)
+    private val session = DesktopSession(runner, paths, daemon)
     private val installer = RuntimeInstaller(
         context = context,
         paths = paths,
