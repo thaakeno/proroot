@@ -45,9 +45,15 @@ class InstallScreen extends StatelessWidget {
     required double start,
     required double end,
   }) {
-    if (snapshot.installed) return _StageState.done;
-    if (snapshot.progress >= end) return _StageState.done;
-    if (snapshot.progress >= start && controller.busy) return _StageState.active;
+    if (snapshot.installed) {
+      return _StageState.done;
+    }
+    if (snapshot.progress >= end) {
+      return _StageState.done;
+    }
+    if (snapshot.progress >= start && controller.busy) {
+      return _StageState.active;
+    }
     return _StageState.pending;
   }
 
