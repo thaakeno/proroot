@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: validated-installer-recovery
+# rebuild marker: safe-apt-progress
 
 on:
   push:
