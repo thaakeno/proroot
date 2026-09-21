@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
 import '../../core/state/runtime_controller.dart';
 import '../apps/apps_screen.dart';
 import '../desktop/desktop_screen.dart';
@@ -23,28 +21,12 @@ class _ShellScreenState extends State<ShellScreen> {
 
   Future<void> _select(int index) async {
     if (_index == index) return;
-
-    final enteringDesktop = index == 1;
-    if (enteringDesktop) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    } else if (_desktopSelected) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
-
     if (!mounted) return;
     setState(() => _index = index);
   }
 
   void _openDesktop() {
     _select(1);
-  }
-
-  @override
-  void dispose() {
-    if (_desktopSelected) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
-    super.dispose();
   }
 
   @override
@@ -74,43 +56,41 @@ class _ShellScreenState extends State<ShellScreen> {
       },
       child: Scaffold(
         body: SafeArea(
-          top: !_desktopSelected,
+          top: true,
           bottom: false,
           child: IndexedStack(index: _index, children: pages),
         ),
-        bottomNavigationBar: _desktopSelected
-            ? null
-            : NavigationBar(
-                selectedIndex: _index,
-                onDestinationSelected: _select,
-                destinations: const [
-                  NavigationDestination(
-                    icon: Icon(Icons.space_dashboard_outlined),
-                    selectedIcon: Icon(Icons.space_dashboard),
-                    label: 'Home',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.desktop_windows_outlined),
-                    selectedIcon: Icon(Icons.desktop_windows),
-                    label: 'Desktop',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.apps_outlined),
-                    selectedIcon: Icon(Icons.apps_rounded),
-                    label: 'Apps',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.downloading_outlined),
-                    selectedIcon: Icon(Icons.downloading),
-                    label: 'Setup',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.tune_outlined),
-                    selectedIcon: Icon(Icons.tune),
-                    label: 'Settings',
-                  ),
-                ],
-              ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: _select,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.space_dashboard_outlined),
+              selectedIcon: Icon(Icons.space_dashboard),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.desktop_windows_outlined),
+              selectedIcon: Icon(Icons.desktop_windows),
+              label: 'Desktop',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.apps_outlined),
+              selectedIcon: Icon(Icons.apps_rounded),
+              label: 'Apps',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.downloading_outlined),
+              selectedIcon: Icon(Icons.downloading),
+              label: 'Setup',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.tune_outlined),
+              selectedIcon: Icon(Icons.tune),
+              label: 'Settings',
+            ),
+          ],
+        ),
       ),
     );
   }
