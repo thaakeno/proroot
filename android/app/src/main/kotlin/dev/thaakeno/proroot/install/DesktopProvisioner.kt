@@ -42,7 +42,8 @@ class DesktopProvisioner(
             set -e
 
             if getent group linux >/dev/null 2>&1; then
-                if [ "$(getent group linux | cut -d: -f3)" != "$desktopUid" ]; then
+                current_gid="$(getent group linux | cut -d: -f3)"
+                if [ "$current_gid" != "$desktopUid" ]; then
                     groupmod -g $desktopUid linux
                 fi
             else
@@ -50,7 +51,8 @@ class DesktopProvisioner(
             fi
 
             if id linux >/dev/null 2>&1; then
-                if [ "$(id -u linux)" != "$desktopUid" ]; then
+                current_uid="$(id -u linux)"
+                if [ "$current_uid" != "$desktopUid" ]; then
                     usermod -u $desktopUid linux
                 fi
                 usermod -g linux -s /bin/bash linux
@@ -220,63 +222,7 @@ class DesktopProvisioner(
               libegl-mesa0 libgbm1 libgl1-mesa-dri libglx-mesa0 \
               mesa-libgallium mesa-vulkan-drivers
             do
-                if dpkg-query -W "${'
-                    apt-mark hold "${'
-                fi
-            done
-        """.trimIndent())
-    }
-
-    private fun runChecked(rootfs: File, command: String, fakeRoot: Boolean = true) {
-        val result = runner.exec(
-            command = command,
-            timeoutSeconds = 1_800,
-            rootfs = rootfs,
-            fakeRoot = fakeRoot,
-        )
-        check(result.successful) {
-            "Provisioning failed (exit ${result.exitCode}):\n${result.output.takeLast(12_000)}"
-        }
-    }
-}
-}package" >/dev/null 2>&1; then
-                    apt-mark hold "$package" >/dev/null
-                fi
-            done
-        """.trimIndent())
-    }
-
-    private fun runChecked(rootfs: File, command: String, fakeRoot: Boolean = true) {
-        val result = runner.exec(
-            command = command,
-            timeoutSeconds = 1_800,
-            rootfs = rootfs,
-            fakeRoot = fakeRoot,
-        )
-        check(result.successful) {
-            "Provisioning failed (exit ${result.exitCode}):\n${result.output.takeLast(12_000)}"
-        }
-    }
-}
-}package" >/dev/null
-                fi
-            done
-        """.trimIndent())
-    }
-
-    private fun runChecked(rootfs: File, command: String, fakeRoot: Boolean = true) {
-        val result = runner.exec(
-            command = command,
-            timeoutSeconds = 1_800,
-            rootfs = rootfs,
-            fakeRoot = fakeRoot,
-        )
-        check(result.successful) {
-            "Provisioning failed (exit ${result.exitCode}):\n${result.output.takeLast(12_000)}"
-        }
-    }
-}
-}package" >/dev/null 2>&1; then
+                if dpkg-query -W "$package" >/dev/null 2>&1; then
                     apt-mark hold "$package" >/dev/null
                 fi
             done
