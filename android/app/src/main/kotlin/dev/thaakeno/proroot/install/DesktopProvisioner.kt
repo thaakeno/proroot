@@ -83,6 +83,13 @@ class DesktopProvisioner(
             test -x /usr/bin/brave-browser
             test -x /usr/local/lib/proroot/start-desktop.sh
             test -c /dev/kgsl-3d0
+            test -r /proc/stat
+            test -r /proc/uptime
+            test -r /proc/vmstat
+            test -r /proc/bus/pci/devices
+            test -w /dev/shm
+            touch /dev/shm/.proroot-shm-test
+            rm -f /dev/shm/.proroot-shm-test
 
             MESA_LOADER_DRIVER_OVERRIDE=kgsl \
             TURNIP_KMD=kgsl \
