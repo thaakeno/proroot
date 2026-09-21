@@ -5,12 +5,14 @@ class LinuxApp {
     required this.categories,
     this.genericName,
     this.icon,
+    this.iconPath,
   });
 
   final String id;
   final String name;
   final String? genericName;
   final String? icon;
+  final String? iconPath;
   final List<String> categories;
 
   factory LinuxApp.fromMap(Map<dynamic, dynamic> map) {
@@ -20,6 +22,7 @@ class LinuxApp {
       name: (map['name'] as String?) ?? '',
       genericName: map['genericName'] as String?,
       icon: map['icon'] as String?,
+      iconPath: map['iconPath'] as String?,
       categories: rawCategories is List
           ? rawCategories.map((value) => '$value').toList(growable: false)
           : const [],
