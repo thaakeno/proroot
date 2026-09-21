@@ -75,6 +75,25 @@ jobs:
           ET.parse("android/app/src/main/assets/guest/system-bus.conf")
           PY
 
+      - name: Validate staged package architecture normalization
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/pkg/DEBIAN" "$tmp/staged"
+          cat >"$tmp/pkg/DEBIAN/control" <<'EOF'
+          Package: test-aarch64-package
+          Version: 1.0
+          Section: misc
+          Priority: optional
+          Architecture: aarch64
+          Maintainer: CI <ci@example.invalid>
+          Description: architecture normalization fixture
+          EOF
+          dpkg-deb -b "$tmp/pkg" "$tmp/staged/test.deb" >/dev/null
+          test "$(dpkg-deb -f "$tmp/staged/test.deb" Architecture)" = "aarch64"
+          bash android/app/src/main/assets/guest/normalize-staged-debs.sh "$tmp/staged"
+          test "$(dpkg-deb -f "$tmp/staged/test.deb" Architecture)" = "arm64"
+
       - name: Compile Android and native sources
         working-directory: android
         run: |
