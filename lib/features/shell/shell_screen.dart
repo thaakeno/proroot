@@ -38,10 +38,7 @@ class _ShellScreenState extends State<ShellScreen> {
         onOpenDesktop: _openDesktop,
         onOpenSetup: () => _select(3),
       ),
-      DesktopScreen(
-        controller: controller,
-        onExitDesktop: () => _select(0),
-      ),
+      DesktopScreen(controller: controller),
       AppsScreen(controller: controller, onOpenDesktop: _openDesktop),
       InstallScreen(controller: controller),
       SettingsScreen(controller: controller),
