@@ -406,12 +406,17 @@ class RuntimeInstaller(
     private fun repairLegacyFailedPackages(staging: File) {
         val result = installRunner.exec(
             command = """
-                if dpkg-query -W -f='${' 2>/dev/null \
+                set -e
+                if dpkg-query -W -f='${db:Status-Abbrev}' brave-browser 2>/dev/null \
                     | grep -qv '^ii '; then
                     dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
                 fi
-                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                rm -f \
+                    /var/lib/dpkg/lock \
+                    /var/lib/dpkg/lock-frontend \
+                    /var/cache/apt/archives/lock
                 dpkg --configure -a || true
+                apt-get -f install -y || true
             """.trimIndent(),
             timeoutSeconds = 300,
             rootfs = staging,
@@ -429,32 +434,8 @@ class RuntimeInstaller(
             appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
         }
 
-    private fun requireAsset(assets: Map<RuntimeAssetKind, File>, kind: RuntimeAssetKind): File =
-        assets[kind] ?: error("Missing runtime asset: $kind")
-}
-}{db:Status-Abbrev}' brave-browser 2>/dev/null \
-                    | grep -qv '^ii '; then
-                    dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
-                fi
-                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
-                dpkg --configure -a || true
-            """.trimIndent(),
-            timeoutSeconds = 300,
-            rootfs = staging,
-            fakeRoot = true,
-        )
-        journal.command("Repairing resumable staging package state", result)
-    }
-
-    private fun markerContents(state: String): String =
-        buildString {
-            appendLine("runtime=1")
-            appendLine("state=$state")
-            appendLine("device=${android.os.Build.DEVICE}")
-            appendLine("uid=${android.os.Process.myUid()}")
-            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
-        }
-
-    private fun requireAsset(assets: Map<RuntimeAssetKind, File>, kind: RuntimeAssetKind): File =
-        assets[kind] ?: error("Missing runtime asset: $kind")
+    private fun requireAsset(
+        assets: Map<RuntimeAssetKind, File>,
+        kind: RuntimeAssetKind,
+    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
 }
