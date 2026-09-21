@@ -273,7 +273,7 @@ class DesktopProvisioner(
                 ProvisioningStage(
                     progress = overall,
                     message = phaseMessage,
-                    etaSeconds = (apt.etaSeconds ?: fallbackEta) + group.etaAfterSeconds,
+                    etaSeconds = apt.etaSeconds?.plus(group.etaAfterSeconds) ?: fallbackEta,
                     stageProgress = apt.fraction,
                     stageDetail = apt.detail,
                     stageDownloadedBytes = apt.downloadedBytes,
