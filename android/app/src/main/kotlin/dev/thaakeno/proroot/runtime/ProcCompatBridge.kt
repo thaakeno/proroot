@@ -119,6 +119,18 @@ class ProcCompatBridge(
             appendLine("pgmajfault 0")
         }
 
+        val zoneinfo = buildString {
+            appendLine("Node 0, zone      Normal")
+            appendLine("  pages free     $freePages")
+            appendLine("        min      0")
+            appendLine("        low      0")
+            appendLine("        high     0")
+            appendLine("        spanned  $totalPages")
+            appendLine("        present  $totalPages")
+            appendLine("        managed  $totalPages")
+            appendLine("        protection: (0, 0, 0, 0)")
+        }
+
         val uname = runCatching { Os.uname() }.getOrNull()
         val release = uname?.release ?: System.getProperty("os.version") ?: "android"
         val version = "Linux version $release (Proroot Android host compatibility bridge)\n"
@@ -129,6 +141,27 @@ class ProcCompatBridge(
         writeAtomic(paths.procLoadavg, loadavg)
         writeAtomic(paths.procVersion, version)
         writeAtomic(paths.procVmstat, vmstat)
+        writeAtomic(paths.procZoneinfo, zoneinfo)
+        writeAtomic(paths.procSwaps, "Filename\tType\tSize\tUsed\tPriority\n")
+        writeAtomic(paths.procVmallocinfo, "")
+        writeAtomic(
+            paths.procFilesystems,
+            """
+            nodev\tsysfs
+            nodev\ttmpfs
+            nodev\tproc
+            nodev\tcgroup
+            nodev\tcgroup2
+            nodev\tdevpts
+            nodev\tsecurityfs
+            \text4
+            \tf2fs
+            \tvfat
+            """.trimIndent() + "\n",
+        )
+        // Android exposes Qualcomm graphics through KGSL rather than PCI.
+        // An empty valid table avoids leaking a host SELinux denial to Linux apps.
+        writeAtomic(paths.procPciDevices, "")
 
         val hostInfo = buildString {
             appendLine("model=${Build.MODEL}")

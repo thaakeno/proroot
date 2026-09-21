@@ -23,6 +23,11 @@ class RuntimePaths(context: Context) {
     val procLoadavg = File(procCompatDir, "loadavg")
     val procVersion = File(procCompatDir, "version")
     val procVmstat = File(procCompatDir, "vmstat")
+    val procZoneinfo = File(procCompatDir, "zoneinfo")
+    val procSwaps = File(procCompatDir, "swaps")
+    val procVmallocinfo = File(procCompatDir, "vmallocinfo")
+    val procFilesystems = File(procCompatDir, "filesystems")
+    val procPciDevices = File(procCompatDir, "bus/pci/devices")
     val hostInfoFile = File(procCompatDir, "host-info")
 
     val installMarker = File(machineDir, ".installed-v1")
@@ -37,7 +42,8 @@ class RuntimePaths(context: Context) {
             anlandDir,
             sharedDir,
             procCompatDir,
-        ).forEach {
+            procPciDevices.parentFile,
+        ).filterNotNull().forEach {
             if (!it.exists()) check(it.mkdirs()) { "Could not create " + it.absolutePath }
         }
     }
