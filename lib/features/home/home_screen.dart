@@ -183,33 +183,46 @@ class HomeScreen extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 20),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: snapshot.running
-                                ? onOpenDesktop
-                                : snapshot.installed
-                                    ? () {
-                                        onOpenDesktop();
-                                        controller.start();
-                                      }
-                                    : controller.install,
-                            icon: Icon(
-                              snapshot.running
-                                  ? Icons.fullscreen_rounded
-                                  : snapshot.installed
-                                      ? Icons.play_arrow_rounded
-                                      : Icons.download_rounded,
-                            ),
-                            label: Text(
-                              snapshot.running
-                                  ? 'Open desktop'
-                                  : snapshot.installed
-                                      ? 'Start Linux'
-                                      : 'Install Linux',
+                        if (snapshot.running)
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  onPressed: onOpenDesktop,
+                                  icon: const Icon(Icons.fullscreen_rounded),
+                                  label: const Text('Open desktop'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              OutlinedButton.icon(
+                                onPressed: controller.stop,
+                                icon: const Icon(Icons.stop_rounded),
+                                label: const Text('Stop Linux'),
+                              ),
+                            ],
+                          )
+                        else
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: snapshot.installed
+                                  ? () {
+                                      onOpenDesktop();
+                                      controller.start();
+                                    }
+                                  : controller.install,
+                              icon: Icon(
+                                snapshot.installed
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.download_rounded,
+                              ),
+                              label: Text(
+                                snapshot.installed
+                                    ? 'Start Linux'
+                                    : 'Install Linux',
+                              ),
                             ),
                           ),
-                        ),
                       ],
                     ],
                   ),
