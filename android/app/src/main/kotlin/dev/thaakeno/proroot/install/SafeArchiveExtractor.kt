@@ -13,21 +13,33 @@ import java.nio.file.Path
 import java.util.zip.ZipInputStream
 
 class SafeArchiveExtractor {
-    fun extractTarXz(archive: File, destination: File) {
+    fun extractTarXz(
+        archive: File,
+        destination: File,
+        stripComponents: Int = 0,
+    ) {
         FileInputStream(archive).buffered(256 * 1024).use { input ->
             XZInputStream(input).use { compressed ->
-                TarArchiveInputStream(BufferedInputStream(compressed, 256 * 1024)).use { tar ->
-                    extractTar(tar, destination)
+                TarArchiveInputStream(
+                    BufferedInputStream(compressed, 256 * 1024),
+                ).use { tar ->
+                    extractTar(tar, destination, stripComponents)
                 }
             }
         }
     }
 
-    fun extractTarGz(archive: File, destination: File) {
+    fun extractTarGz(
+        archive: File,
+        destination: File,
+        stripComponents: Int = 0,
+    ) {
         FileInputStream(archive).buffered(256 * 1024).use { input ->
             GzipCompressorInputStream(input).use { compressed ->
-                TarArchiveInputStream(BufferedInputStream(compressed, 256 * 1024)).use { tar ->
-                    extractTar(tar, destination)
+                TarArchiveInputStream(
+                    BufferedInputStream(compressed, 256 * 1024),
+                ).use { tar ->
+                    extractTar(tar, destination, stripComponents)
                 }
             }
         }
@@ -52,13 +64,19 @@ class SafeArchiveExtractor {
         }
     }
 
-    private fun extractTar(tar: TarArchiveInputStream, destination: File) {
+    private fun extractTar(
+        tar: TarArchiveInputStream,
+        destination: File,
+        stripComponents: Int,
+    ) {
+        require(stripComponents >= 0) { "stripComponents must be non-negative" }
         destination.mkdirs()
         val hardLinks = mutableListOf<Pair<File, String>>()
 
         while (true) {
             val entry = tar.nextTarEntry ?: break
-            val target = safeTarget(destination, entry.name)
+            val member = stripPath(entry.name, stripComponents) ?: continue
+            val target = safeTarget(destination, member)
 
             when {
                 entry.isDirectory -> {
@@ -71,8 +89,10 @@ class SafeArchiveExtractor {
                     Files.createSymbolicLink(target.toPath(), Path.of(entry.linkName))
                 }
                 entry.isLink -> {
+                    val linkName = stripPath(entry.linkName, stripComponents)
+                        ?: error("Hard-link target disappeared while stripping: ${entry.linkName}")
                     target.parentFile?.mkdirs()
-                    hardLinks += target to entry.linkName
+                    hardLinks += target to linkName
                 }
                 entry.isFile -> {
                     target.parentFile?.mkdirs()
@@ -89,6 +109,14 @@ class SafeArchiveExtractor {
             target.delete()
             Files.createLink(target.toPath(), source.toPath())
         }
+    }
+
+    private fun stripPath(path: String, components: Int): String? {
+        if (components == 0) return path
+        val clean = path.trimStart('/')
+        val parts = clean.split('/').filter { it.isNotEmpty() }
+        if (parts.size <= components) return null
+        return parts.drop(components).joinToString("/")
     }
 
     private fun safeTarget(root: File, member: String): File {
