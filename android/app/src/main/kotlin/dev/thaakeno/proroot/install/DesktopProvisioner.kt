@@ -14,6 +14,9 @@ class DesktopProvisioner(
         rootfs: File,
         onProgress: (ProvisioningStage) -> Unit = {},
     ) {
+        onProgress(ProvisioningStage(0.45, "Checking proroot runtime"))
+        runChecked(rootfs, "/bin/true")
+
         onProgress(ProvisioningStage(0.46, "Preparing Debian package sources"))
         prepareConfiguration(rootfs)
         runChecked(rootfs, "apt-get update")
