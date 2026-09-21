@@ -20,6 +20,13 @@ class RuntimeSnapshot {
     required this.speedBytesPerSecond,
     required this.elapsedSeconds,
     required this.etaSeconds,
+    required this.stageProgress,
+    required this.stageDetail,
+    required this.stageDownloadedBytes,
+    required this.stageTotalBytes,
+    required this.stageSpeedBytesPerSecond,
+    required this.completedItems,
+    required this.totalItems,
     required this.installed,
     required this.running,
     this.detail,
@@ -34,6 +41,13 @@ class RuntimeSnapshot {
         speedBytesPerSecond = 0,
         elapsedSeconds = 0,
         etaSeconds = null,
+        stageProgress = null,
+        stageDetail = null,
+        stageDownloadedBytes = 0,
+        stageTotalBytes = 0,
+        stageSpeedBytesPerSecond = 0,
+        completedItems = 0,
+        totalItems = 0,
         installed = false,
         running = false,
         detail = null;
@@ -46,6 +60,13 @@ class RuntimeSnapshot {
   final int speedBytesPerSecond;
   final int elapsedSeconds;
   final int? etaSeconds;
+  final double? stageProgress;
+  final String? stageDetail;
+  final int stageDownloadedBytes;
+  final int stageTotalBytes;
+  final int stageSpeedBytesPerSecond;
+  final int completedItems;
+  final int totalItems;
   final bool installed;
   final bool running;
   final String? detail;
@@ -67,6 +88,15 @@ class RuntimeSnapshot {
       speedBytesPerSecond: (map['speedBytesPerSecond'] as num?)?.toInt() ?? 0,
       elapsedSeconds: (map['elapsedSeconds'] as num?)?.toInt() ?? 0,
       etaSeconds: (map['etaSeconds'] as num?)?.toInt(),
+      stageProgress: (map['stageProgress'] as num?)?.clamp(0, 1).toDouble(),
+      stageDetail: map['stageDetail'] as String?,
+      stageDownloadedBytes:
+          (map['stageDownloadedBytes'] as num?)?.toInt() ?? 0,
+      stageTotalBytes: (map['stageTotalBytes'] as num?)?.toInt() ?? 0,
+      stageSpeedBytesPerSecond:
+          (map['stageSpeedBytesPerSecond'] as num?)?.toInt() ?? 0,
+      completedItems: (map['completedItems'] as num?)?.toInt() ?? 0,
+      totalItems: (map['totalItems'] as num?)?.toInt() ?? 0,
       installed: map['installed'] == true,
       running: map['running'] == true,
       detail: map['detail'] as String?,
@@ -83,6 +113,15 @@ class RuntimeSnapshot {
     int? elapsedSeconds,
     int? etaSeconds,
     bool clearEta = false,
+    double? stageProgress,
+    bool clearStageProgress = false,
+    String? stageDetail,
+    bool clearStageDetail = false,
+    int? stageDownloadedBytes,
+    int? stageTotalBytes,
+    int? stageSpeedBytesPerSecond,
+    int? completedItems,
+    int? totalItems,
     bool? installed,
     bool? running,
     String? detail,
@@ -96,6 +135,17 @@ class RuntimeSnapshot {
       speedBytesPerSecond: speedBytesPerSecond ?? this.speedBytesPerSecond,
       elapsedSeconds: elapsedSeconds ?? this.elapsedSeconds,
       etaSeconds: clearEta ? null : etaSeconds ?? this.etaSeconds,
+      stageProgress: clearStageProgress
+          ? null
+          : stageProgress ?? this.stageProgress,
+      stageDetail: clearStageDetail ? null : stageDetail ?? this.stageDetail,
+      stageDownloadedBytes:
+          stageDownloadedBytes ?? this.stageDownloadedBytes,
+      stageTotalBytes: stageTotalBytes ?? this.stageTotalBytes,
+      stageSpeedBytesPerSecond:
+          stageSpeedBytesPerSecond ?? this.stageSpeedBytesPerSecond,
+      completedItems: completedItems ?? this.completedItems,
+      totalItems: totalItems ?? this.totalItems,
       installed: installed ?? this.installed,
       running: running ?? this.running,
       detail: detail ?? this.detail,
