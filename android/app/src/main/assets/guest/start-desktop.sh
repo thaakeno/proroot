@@ -2,7 +2,6 @@
 set -euo pipefail
 
 refresh="${1:-120}"
-scale="${2:-1.0}"
 uid="$(id -u)"
 runtime="/run/user/$uid"
 
@@ -35,7 +34,6 @@ export XDG_CURRENT_DESKTOP=KDE
 export XDG_SESSION_DESKTOP=KDE
 export XDG_SESSION_TYPE=wayland
 export QT_QPA_PLATFORM=wayland
-export QT_SCALE_FACTOR="$scale"
 export GDK_BACKEND=wayland,x11
 export SDL_VIDEODRIVER=wayland
 export CLUTTER_BACKEND=wayland
