@@ -102,21 +102,29 @@ chmod 0600 "$env_file"
 
 xdg-user-dirs-update >/dev/null 2>&1 || true
 
+# KWin's Android/Anland backend is native Wayland. Do not start Xwayland here:
+# Android's seccomp rejects a syscall in the pinned Xwayland build under proroot.
+# This is the same direct session shape upstream Anland uses for rootless fallback.
 session_pid=""
 cleanup_session() {
     if [[ -n "$session_pid" ]]; then
         kill "$session_pid" >/dev/null 2>&1 || true
     fi
+    pkill -x plasmashell >/dev/null 2>&1 || true
+    pkill -x kwin_wayland >/dev/null 2>&1 || true
 }
 trap 'cleanup_session; cleanup_audio' EXIT INT TERM
 
-# Start the full Plasma session first. A PATH shim strips the --xwayland
-# argument because Xwayland currently hits Android SIGSYS under proroot.
-startplasma-wayland &
+# Keep Plasma's classic non-systemd path explicit for helpers started later.
+kwriteconfig6 --file startkderc --group General --key systemdBoot false >/dev/null 2>&1 || true
+
+kwin_wayland plasmashell &
 session_pid=$!
 
+# Wait for the compositor, shell and published Wayland socket. If any one of
+# these never appears, fail the session instead of reporting a fake "Running".
 healthy=0
-for _ in $(seq 1 120); do
+for _ in $(seq 1 200); do
     if ! kill -0 "$session_pid" >/dev/null 2>&1; then
         break
     fi
@@ -129,24 +137,15 @@ for _ in $(seq 1 120); do
     sleep 0.1
 done
 
-if [[ "$healthy" -eq 1 ]]; then
-    # Keep this supervisor alive for the lifetime of KWin even if
-    # startplasma-wayland's launcher process returns after startup.
-    while pgrep -x kwin_wayland >/dev/null 2>&1; do
-        sleep 1
-    done
-    wait "$session_pid" >/dev/null 2>&1 || true
-    exit 0
+if [[ "$healthy" -ne 1 ]]; then
+    echo "Plasma Wayland compositor did not become healthy" >&2
+    exit 70
 fi
 
-# Full-session startup can fail on rootless/non-systemd Android environments.
-# Upstream Anland itself uses this direct Wayland fallback.
-kill "$session_pid" >/dev/null 2>&1 || true
-wait "$session_pid" >/dev/null 2>&1 || true
-pkill -x kwin_wayland >/dev/null 2>&1 || true
-pkill -x plasmashell >/dev/null 2>&1 || true
-sleep 0.3
+# Optional session helpers. Plasma/DBus will also activate these on demand; starting
+# them here avoids depending on a systemd --user instance that Android does not have.
+command -v kded6 >/dev/null 2>&1 && kded6 >/dev/null 2>&1 &
+command -v krunner >/dev/null 2>&1 && krunner >/dev/null 2>&1 &
 
-kwin_wayland plasmashell &
-session_pid=$!
 wait "$session_pid"
+
