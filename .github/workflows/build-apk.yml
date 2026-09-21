@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: unified-desktop-identity-v4
+# rebuild marker: unified-desktop-identity-v5
 
 on:
   push:
