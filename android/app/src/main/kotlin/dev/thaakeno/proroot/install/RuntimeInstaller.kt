@@ -413,7 +413,6 @@ class RuntimeInstaller(
                 name.startsWith("launch-") ||
                 name.startsWith("set-") ||
                 name.startsWith("check-") ||
-                name == "kwin_wayland_wrapper" ||
                 name.endsWith("-bridge.py")
             Os.chmod(
                 target.absolutePath,
