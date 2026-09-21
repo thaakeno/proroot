@@ -55,7 +55,12 @@ class RuntimeInstaller(
         )
         staging.deleteRecursively()
         check(staging.mkdirs()) { "Could not create staging rootfs" }
-        extractor.extractTarXz(requireAsset(assets, RuntimeAssetKind.ROOTFS), staging)
+        extractor.extractTarXz(
+            requireAsset(assets, RuntimeAssetKind.ROOTFS),
+            staging,
+            stripComponents = 1,
+        )
+        verifyRootfsLayout(staging)
         installGuestScripts(staging)
 
         emit(
@@ -118,6 +123,21 @@ class RuntimeInstaller(
         } catch (t: Throwable) {
             journal.failure(t)
             throw t
+        }
+    }
+
+    private fun verifyRootfsLayout(rootfs: File) {
+        check(File(rootfs, "etc").isDirectory) {
+            "Debian archive extracted without /etc; rootfs layout is invalid"
+        }
+        check(File(rootfs, "usr").isDirectory) {
+            "Debian archive extracted without /usr; rootfs layout is invalid"
+        }
+        check(
+            File(rootfs, "bin/bash").exists() ||
+                File(rootfs, "usr/bin/bash").exists(),
+        ) {
+            "Debian archive extracted without bash; rootfs layout is invalid"
         }
     }
 
