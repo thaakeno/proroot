@@ -21,25 +21,41 @@ class DesktopProvisioner(
         prepareConfiguration(rootfs)
         runChecked(rootfs, "apt-get update")
 
-        onProgress(ProvisioningStage(0.50, "Installing Plasma and desktop applications"))
+        onProgress(ProvisioningStage(0.49, "Validating Debian desktop packages"))
         runChecked(rootfs, """
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux \
-              dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower \
-              python3-dbus python3-gi gir1.2-glib-2.0 \
-              xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info \
-              xdg-desktop-portal xdg-desktop-portal-kde \
-              kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin \
-              breeze breeze-icon-theme kde-config-gtk-style kio-extras \
-              konsole dolphin kate ark okular spectacle gwenview kcalc \
-              xwayland libgtk-3-bin \
-              pipewire pipewire-pulse wireplumber \
-              fonts-noto fonts-noto-cjk fonts-noto-color-emoji fonts-liberation \
-              firefox-esr mesa-utils vulkan-tools glmark2 \
-              libreoffice gimp vlc \
-              build-essential cmake pkg-config python3 python3-pip nodejs npm \
-              git openssh-client rsync file procps iproute2 net-tools jq ripgrep fd-find \
+            set -e
+            packages='
+              ca-certificates curl wget gnupg apt-transport-https locales sudo util-linux
+              dbus dbus-bin dbus-x11 dbus-user-session polkitd pkexec packagekit packagekit-tools upower
+              python3-dbus python3-gi gir1.2-glib-2.0
+              xdg-user-dirs xdg-utils desktop-file-utils shared-mime-info
+              xdg-desktop-portal xdg-desktop-portal-kde
+              kde-plasma-desktop plasma-workspace plasma-discover systemsettings libkscreen-bin
+              breeze breeze-icon-theme kde-config-gtk-style kio-extras
+              konsole dolphin kate ark okular kde-spectacle gwenview kcalc
+              xwayland libgtk-3-bin
+              pipewire pipewire-pulse wireplumber
+              fonts-noto fonts-noto-cjk fonts-noto-color-emoji fonts-liberation
+              firefox-esr mesa-utils vulkan-tools glmark2
+              libreoffice gimp vlc
+              build-essential cmake pkg-config python3 python3-pip nodejs npm
+              git openssh-client rsync file procps iproute2 net-tools jq ripgrep fd-find
               htop nano vim less unzip xz-utils
+            '
+
+            missing=''
+            for package in $packages; do
+                if ! apt-cache show "$package" >/dev/null 2>&1; then
+                    missing="$missing $package"
+                fi
+            done
+
+            if [ -n "$missing" ]; then
+                printf 'Missing Debian packages:%s\\n' "$missing" >&2
+                exit 100
+            fi
+
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages
         """.trimIndent())
 
         onProgress(ProvisioningStage(0.66, "Creating persistent Linux desktop user"))
