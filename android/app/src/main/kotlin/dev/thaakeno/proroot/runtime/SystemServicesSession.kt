@@ -4,7 +4,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 class SystemServicesSession(
-    private val runner: ProrootRunner,
+    private val runner: GuestRunner,
     private val paths: RuntimePaths,
 ) {
     private var process: Process? = null
