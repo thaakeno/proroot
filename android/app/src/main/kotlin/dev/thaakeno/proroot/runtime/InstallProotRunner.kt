@@ -42,6 +42,24 @@ class InstallProotRunner(
         timeoutSeconds: Long,
         rootfs: File?,
         fakeRoot: Boolean,
+    ): CommandResult =
+        runCommand(command, timeoutSeconds, rootfs, fakeRoot) { }
+
+    override fun execStreaming(
+        command: String,
+        timeoutSeconds: Long,
+        rootfs: File?,
+        fakeRoot: Boolean,
+        onOutput: (String) -> Unit,
+    ): CommandResult =
+        runCommand(command, timeoutSeconds, rootfs, fakeRoot, onOutput)
+
+    private fun runCommand(
+        command: String,
+        timeoutSeconds: Long,
+        rootfs: File?,
+        fakeRoot: Boolean,
+        onOutput: (String) -> Unit,
     ): CommandResult {
         val targetRootfs = rootfs ?: paths.rootfs
         val process = command(
@@ -54,7 +72,10 @@ class InstallProotRunner(
         val output = StringBuilder()
         val reader = Thread {
             process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { output.appendLine(it) }
+                lines.forEach { line ->
+                    output.appendLine(line)
+                    onOutput(line)
+                }
             }
         }.apply {
             name = "installer-runtime-output"
