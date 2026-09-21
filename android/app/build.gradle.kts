@@ -93,15 +93,15 @@ dependencies {
     implementation("org.tukaani:xz:1.10")
 }
 
-data class RuntimeLibrary(val name: String, val sha256: String)
+data class RuntimeLibrary(val name: String, val sha256: String, val assetId: Long)
 
 val prorootVersion = "v1.2.8"
 val prorootLibraries = listOf(
-    RuntimeLibrary("libproroot.so", "a4e74d75b66cdc02b080adfe863dbf9951c3b30610d77beddc95488d5fe5de01"),
-    RuntimeLibrary("libproroot-runtime.so", "8c47a0a7db32d84c179ebb5bf3640f655a3181860ece5886ae44d92858730c34"),
-    RuntimeLibrary("libproroot-bridge.so", "1c5bc9537a270e8bf8b1c70222813f57b60b828bfb5503ddf8fe37685092de2f"),
-    RuntimeLibrary("libproroot-linker.so", "51a0ec5bfed00e572a0de09e22d9057e2befc386b78e426613d3e0ab03f4ecee"),
-    RuntimeLibrary("libproroot-stub-loader.so", "06c6624db3bdc45b9ced151cd781df439a37b47731d244b93e9d6a58cd48cde0"),
+    RuntimeLibrary("libproroot.so", "a4e74d75b66cdc02b080adfe863dbf9951c3b30610d77beddc95488d5fe5de01", 449758014L),
+    RuntimeLibrary("libproroot-runtime.so", "8c47a0a7db32d84c179ebb5bf3640f655a3181860ece5886ae44d92858730c34", 449758016L),
+    RuntimeLibrary("libproroot-bridge.so", "1c5bc9537a270e8bf8b1c70222813f57b60b828bfb5503ddf8fe37685092de2f", 449758015L),
+    RuntimeLibrary("libproroot-linker.so", "51a0ec5bfed00e572a0de09e22d9057e2befc386b78e426613d3e0ab03f4ecee", 449758017L),
+    RuntimeLibrary("libproroot-stub-loader.so", "06c6624db3bdc45b9ced151cd781df439a37b47731d244b93e9d6a58cd48cde0", 449758013L),
 )
 
 fun sha256(file: File): String {
@@ -127,31 +127,51 @@ val prepareProrootLibraries by tasks.registering {
         prorootLibraries.forEach { runtimeLib ->
             val output = File(outDir, runtimeLib.name)
             if (!output.exists() || sha256(output) != runtimeLib.sha256) {
-                val url = URL(
-                    "https://github.com/coderredlab/proroot/releases/download/$prorootVersion/${runtimeLib.name}",
+                val sources = listOf(
+                    URL(
+                        "https://github.com/coderredlab/proroot/releases/download/$prorootVersion/${runtimeLib.name}",
+                    ) to false,
+                    URL(
+                        "https://api.github.com/repos/coderredlab/proroot/releases/assets/${runtimeLib.assetId}",
+                    ) to true,
                 )
+                val githubToken = System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }
                 var lastFailure: Throwable? = null
-                for (attempt in 0 until 4) {
-                    try {
-                        output.delete()
-                        url.openConnection().apply {
-                            connectTimeout = 20_000
-                            readTimeout = 60_000
-                        }.getInputStream().buffered().use { input ->
-                            output.outputStream().buffered().use(input::copyTo)
+                var downloaded = false
+
+                attemptLoop@ for (attempt in 0 until 4) {
+                    for ((url, apiAsset) in sources) {
+                        try {
+                            output.delete()
+                            val connection = url.openConnection().apply {
+                                connectTimeout = 20_000
+                                readTimeout = 60_000
+                                setRequestProperty("User-Agent", "proroot-android-build")
+                                if (apiAsset) {
+                                    setRequestProperty("Accept", "application/octet-stream")
+                                    githubToken?.let {
+                                        setRequestProperty("Authorization", "Bearer $it")
+                                    }
+                                }
+                            }
+                            connection.getInputStream().buffered().use { input ->
+                                output.outputStream().buffered().use(input::copyTo)
+                            }
+                            check(sha256(output) == runtimeLib.sha256) {
+                                "Checksum failed for ${runtimeLib.name}"
+                            }
+                            downloaded = true
+                            lastFailure = null
+                            break@attemptLoop
+                        } catch (failure: Throwable) {
+                            lastFailure = failure
+                            output.delete()
                         }
-                        check(sha256(output) == runtimeLib.sha256) {
-                            "Checksum failed for ${runtimeLib.name}"
-                        }
-                        lastFailure = null
-                        break
-                    } catch (failure: Throwable) {
-                        lastFailure = failure
-                        output.delete()
-                        if (attempt < 3) Thread.sleep(1_500L * (attempt + 1))
                     }
+                    if (attempt < 3) Thread.sleep(1_500L * (attempt + 1))
                 }
-                check(lastFailure == null && output.exists()) {
+
+                check(downloaded && output.exists()) {
                     "Could not fetch verified ${runtimeLib.name}: ${lastFailure?.message}"
                 }
             }
