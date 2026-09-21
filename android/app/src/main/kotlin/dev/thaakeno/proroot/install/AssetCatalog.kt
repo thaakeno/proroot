@@ -22,9 +22,5 @@ object AssetCatalog {
             "https://github.com/lfdevs/anland-termux/releases/download/5.13.3/xwayland_24.1.6-91_arm64.deb",
             "59f9c7486d6a10ad50a13622bf1d1bbf5accd015d630e4b2b0152a80577dcc64",
             825_848, "xwayland_24.1.6-91_arm64.deb"),
-        RuntimeAsset("brave-arm64-1.95.104", RuntimeAssetKind.BRAVE,
-            "https://github.com/brave/brave-browser/releases/download/v1.95.104/brave-browser_1.95.104_arm64.deb",
-            "251ee83fa383db6106ae6140df0975689b226d15ceb96cdb4147cb90cd7c25ba",
-            140_194_012, "brave-browser_1.95.104_arm64.deb"),
     )
 }
