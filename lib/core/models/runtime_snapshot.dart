@@ -18,6 +18,8 @@ class RuntimeSnapshot {
     required this.downloadedBytes,
     required this.totalBytes,
     required this.speedBytesPerSecond,
+    required this.elapsedSeconds,
+    required this.etaSeconds,
     required this.installed,
     required this.running,
     this.detail,
@@ -30,6 +32,8 @@ class RuntimeSnapshot {
         downloadedBytes = 0,
         totalBytes = 0,
         speedBytesPerSecond = 0,
+        elapsedSeconds = 0,
+        etaSeconds = null,
         installed = false,
         running = false,
         detail = null;
@@ -40,6 +44,8 @@ class RuntimeSnapshot {
   final int downloadedBytes;
   final int totalBytes;
   final int speedBytesPerSecond;
+  final int elapsedSeconds;
+  final int? etaSeconds;
   final bool installed;
   final bool running;
   final String? detail;
@@ -59,6 +65,8 @@ class RuntimeSnapshot {
       downloadedBytes: (map['downloadedBytes'] as num?)?.toInt() ?? 0,
       totalBytes: (map['totalBytes'] as num?)?.toInt() ?? 0,
       speedBytesPerSecond: (map['speedBytesPerSecond'] as num?)?.toInt() ?? 0,
+      elapsedSeconds: (map['elapsedSeconds'] as num?)?.toInt() ?? 0,
+      etaSeconds: (map['etaSeconds'] as num?)?.toInt(),
       installed: map['installed'] == true,
       running: map['running'] == true,
       detail: map['detail'] as String?,
@@ -72,6 +80,9 @@ class RuntimeSnapshot {
     int? downloadedBytes,
     int? totalBytes,
     int? speedBytesPerSecond,
+    int? elapsedSeconds,
+    int? etaSeconds,
+    bool clearEta = false,
     bool? installed,
     bool? running,
     String? detail,
@@ -83,6 +94,8 @@ class RuntimeSnapshot {
       downloadedBytes: downloadedBytes ?? this.downloadedBytes,
       totalBytes: totalBytes ?? this.totalBytes,
       speedBytesPerSecond: speedBytesPerSecond ?? this.speedBytesPerSecond,
+      elapsedSeconds: elapsedSeconds ?? this.elapsedSeconds,
+      etaSeconds: clearEta ? null : etaSeconds ?? this.etaSeconds,
       installed: installed ?? this.installed,
       running: running ?? this.running,
       detail: detail ?? this.detail,
