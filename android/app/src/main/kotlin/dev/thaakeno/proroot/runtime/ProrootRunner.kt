@@ -35,6 +35,7 @@ class ProrootRunner(
             "--link2symlink",
             "-w", workingDirectory,
             "-b", "/dev:/dev",
+            "-b", "${paths.shmDir.absolutePath}:/dev/shm",
             "-b", "/proc:/proc",
             "-b", "${paths.procStat.absolutePath}:/proc/stat",
             "-b", "${paths.procUptime.absolutePath}:/proc/uptime",
