@@ -149,12 +149,22 @@ class RuntimeEngine private constructor(private val context: Context) {
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = RuntimePhase.starting,
-                        message = "Starting KDE Plasma",
+                        message = "Preparing Linux runtime",
                         installed = true,
                     ),
                 )
 
-                var firstFailure = runCatching { startDesktopOnce() }.exceptionOrNull()
+                var firstFailure = runCatching {
+                    installer.prepareInstalledRuntime()
+                    RuntimeEvents.publish(
+                        RuntimeStatus(
+                            phase = RuntimePhase.starting,
+                            message = "Starting KDE Plasma",
+                            installed = true,
+                        ),
+                    )
+                    startDesktopOnce()
+                }.exceptionOrNull()
                 if (firstFailure == null) {
                     publishRunning("KDE Plasma is running")
                     return@withLock
