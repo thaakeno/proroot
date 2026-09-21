@@ -12,7 +12,7 @@ import java.io.File
 class RuntimeInstaller(
     private val context: Context,
     private val paths: RuntimePaths,
-    runner: GuestRunner,
+    installRunner: GuestRunner,
 ) {
     companion object {
         private const val INTERNAL_READY_MARKER = ".proroot-runtime-ready"
@@ -21,7 +21,7 @@ class RuntimeInstaller(
     private val downloads = DownloadCoordinator(paths.cacheDir)
     private val journal = InstallJournal(paths)
     private val provisioner = DesktopProvisioner(
-        runner = runner,
+        runner = installRunner,
         desktopUid = android.os.Process.myUid(),
         journal = journal,
     )
