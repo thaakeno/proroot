@@ -16,6 +16,7 @@ class RuntimeInstaller(
 ) {
     companion object {
         private const val INTERNAL_READY_MARKER = ".proroot-runtime-ready"
+        private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
     }
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
@@ -69,23 +70,42 @@ class RuntimeInstaller(
         val staging = paths.rootfsStaging
         val packageDir = File(staging, "opt/proroot-packages")
 
-        emit(
-            installStatus(
-                phase = RuntimePhase.extracting,
-                progress = 0.42,
-                message = "Extracting Debian",
-                downloadedBytes = totalDownloadBytes,
-            ),
-        )
-        staging.deleteRecursively()
-        check(staging.mkdirs()) { "Could not create staging rootfs" }
-        extractor.extractTarXz(
-            requireAsset(assets, RuntimeAssetKind.ROOTFS),
-            staging,
-            stripComponents = 1,
-        )
-        verifyRootfsLayout(staging)
-        installGuestScripts(staging)
+        val rootfsAsset = requireAsset(assets, RuntimeAssetKind.ROOTFS)
+        val resumeStaging = canResumeStaging(staging, rootfsAsset)
+
+        if (resumeStaging) {
+            emit(
+                installStatus(
+                    phase = RuntimePhase.extracting,
+                    progress = 0.44,
+                    message = "Resuming previous setup",
+                    downloadedBytes = totalDownloadBytes,
+                    etaSeconds = 180,
+                ),
+            )
+            verifyRootfsLayout(staging)
+            installGuestScripts(staging)
+            repairLegacyFailedPackages(staging)
+        } else {
+            emit(
+                installStatus(
+                    phase = RuntimePhase.extracting,
+                    progress = 0.42,
+                    message = "Extracting Debian",
+                    downloadedBytes = totalDownloadBytes,
+                ),
+            )
+            staging.deleteRecursively()
+            check(staging.mkdirs()) { "Could not create staging rootfs" }
+            extractor.extractTarXz(
+                rootfsAsset,
+                staging,
+                stripComponents = 1,
+            )
+            verifyRootfsLayout(staging)
+            installGuestScripts(staging)
+        }
+        writeStagingMarker(staging, rootfsAsset)
 
         emit(
             installStatus(
@@ -98,7 +118,6 @@ class RuntimeInstaller(
         packageDir.mkdirs()
         stagePackage(requireAsset(assets, RuntimeAssetKind.ANLAND_GUEST), File(packageDir, "anland/anland.deb"))
         stagePackage(requireAsset(assets, RuntimeAssetKind.XWAYLAND_PACKAGE), File(packageDir, "xwayland/xwayland.deb"))
-        stagePackage(requireAsset(assets, RuntimeAssetKind.BRAVE), File(packageDir, "brave/brave.deb"))
         extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
         provisioner.provisionBase(staging) { stage ->
@@ -107,8 +126,25 @@ class RuntimeInstaller(
                     phase = RuntimePhase.provisioning,
                     progress = stage.progress,
                     message = stage.message,
-                    downloadedBytes = totalDownloadBytes,
+                    downloadedBytes = if (stage.stageTotalBytes > 0L) {
+                        stage.stageDownloadedBytes
+                    } else {
+                        totalDownloadBytes
+                    },
+                    totalBytes = if (stage.stageTotalBytes > 0L) {
+                        stage.stageTotalBytes
+                    } else {
+                        totalDownloadBytes
+                    },
+                    speedBytesPerSecond = stage.stageSpeedBytesPerSecond,
                     etaSeconds = stage.etaSeconds,
+                    stageProgress = stage.stageProgress,
+                    stageDetail = stage.stageDetail,
+                    stageDownloadedBytes = stage.stageDownloadedBytes,
+                    stageTotalBytes = stage.stageTotalBytes,
+                    stageSpeedBytesPerSecond = stage.stageSpeedBytesPerSecond,
+                    completedItems = stage.completedItems,
+                    totalItems = stage.totalItems,
                 ),
             )
         }
@@ -116,7 +152,7 @@ class RuntimeInstaller(
         emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
-                progress = 0.92,
+                progress = 0.94,
                 message = "Installing pinned Adreno 840 graphics",
                 etaSeconds = 45,
                 downloadedBytes = totalDownloadBytes,
@@ -127,7 +163,7 @@ class RuntimeInstaller(
         emit(
             installStatus(
                 phase = RuntimePhase.provisioning,
-                progress = 0.96,
+                progress = 0.97,
                 message = "Verifying GPU and desktop compatibility",
                 etaSeconds = 30,
                 downloadedBytes = totalDownloadBytes,
@@ -287,16 +323,77 @@ class RuntimeInstaller(
         progress: Double,
         message: String,
         downloadedBytes: Long,
+        totalBytes: Long = downloadedBytes,
+        speedBytesPerSecond: Long = 0,
         etaSeconds: Long? = null,
+        stageProgress: Double? = null,
+        stageDetail: String? = null,
+        stageDownloadedBytes: Long = 0,
+        stageTotalBytes: Long = 0,
+        stageSpeedBytesPerSecond: Long = 0,
+        completedItems: Int = 0,
+        totalItems: Int = 0,
     ): RuntimeStatus = RuntimeStatus(
         phase = phase,
         progress = progress,
         message = message,
         downloadedBytes = downloadedBytes,
-        totalBytes = downloadedBytes,
-        speedBytesPerSecond = 0,
+        totalBytes = totalBytes,
+        speedBytesPerSecond = speedBytesPerSecond,
         etaSeconds = etaSeconds,
+        stageProgress = stageProgress,
+        stageDetail = stageDetail,
+        stageDownloadedBytes = stageDownloadedBytes,
+        stageTotalBytes = stageTotalBytes,
+        stageSpeedBytesPerSecond = stageSpeedBytesPerSecond,
+        completedItems = completedItems,
+        totalItems = totalItems,
     )
+
+    private fun canResumeStaging(
+        staging: File,
+        rootfsAsset: RuntimeAsset,
+    ): Boolean {
+        if (!staging.isDirectory) return false
+        if (!File(staging, "etc/debian_version").isFile) return false
+        if (!File(staging, "var/lib/dpkg/status").isFile) return false
+        if (!File(staging, "usr/bin/apt-get").isFile) return false
+
+        val marker = File(staging, STAGING_RESUME_MARKER)
+        if (marker.isFile) {
+            return marker.readText().contains("rootfsSha256=${rootfsAsset.sha256}")
+        }
+
+        // Accept a valid staging tree from the immediately preceding failed build
+        // so an app update can resume instead of throwing away hundreds of packages.
+        return paths.lastInstallFailure.isFile
+    }
+
+    private fun writeStagingMarker(
+        staging: File,
+        rootfsAsset: RuntimeAsset,
+    ) {
+        File(staging, STAGING_RESUME_MARKER).writeText(
+            "rootfsSha256=${rootfsAsset.sha256}\n",
+        )
+    }
+
+    private fun repairLegacyFailedPackages(staging: File) {
+        val result = installRunner.exec(
+            command = """
+                if dpkg-query -W -f='${db:Status-Abbrev}' brave-browser 2>/dev/null \
+                    | grep -qv '^ii '; then
+                    dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                fi
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                dpkg --configure -a || true
+            """.trimIndent(),
+            timeoutSeconds = 300,
+            rootfs = staging,
+            fakeRoot = true,
+        )
+        journal.command("Repairing resumable staging package state", result)
+    }
 
     private fun markerContents(state: String): String =
         buildString {
