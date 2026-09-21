@@ -11,6 +11,7 @@ class ProrootRunner(
     private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
     private val launcher = File(nativeDir, "libproroot.so")
     private val procCompat = ProcCompatBridge(context, paths)
+    private val networkBridge = HostNetworkBridge(context)
 
     init {
         check(launcher.isFile) { "libproroot.so is missing from nativeLibraryDir" }
@@ -24,6 +25,7 @@ class ProrootRunner(
         fakeRoot: Boolean = true,
         extraEnvironment: Map<String, String> = emptyMap(),
     ): ProcessBuilder {
+        networkBridge.sync(rootfs)
         procCompat.refresh()
 
         val args = mutableListOf(
