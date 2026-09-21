@@ -73,6 +73,7 @@ class DesktopProvisioner(
         runChecked(rootfs, "ldconfig")
         runChecked(rootfs, """
             set -e
+            test "$(id -u)" = "$desktopUid"
             test -x /usr/bin/startplasma-wayland
             test -x /usr/bin/konsole
             test -x /usr/bin/dolphin
@@ -88,7 +89,9 @@ class DesktopProvisioner(
               vulkaninfo --summary 2>&1 | tee /tmp/proroot-vulkan-summary.txt
 
             grep -Eiq 'Adreno|turnip' /tmp/proroot-vulkan-summary.txt
-        """.trimIndent())
+            /usr/local/bin/brave-browser --version
+            firefox-esr --version
+        """.trimIndent(), fakeRoot = false)
     }
 
     private fun prepareConfiguration(rootfs: File) {
@@ -179,8 +182,13 @@ class DesktopProvisioner(
         }
     }
 
-    private fun runChecked(rootfs: File, command: String) {
-        val result = runner.exec(command, timeoutSeconds = 1_800, rootfs = rootfs)
+    private fun runChecked(rootfs: File, command: String, fakeRoot: Boolean = true) {
+        val result = runner.exec(
+            command = command,
+            timeoutSeconds = 1_800,
+            rootfs = rootfs,
+            fakeRoot = fakeRoot,
+        )
         check(result.successful) {
             "Provisioning failed (exit ${result.exitCode}):\n${result.output.takeLast(12_000)}"
         }
