@@ -47,6 +47,7 @@ class DownloadCoordinator(
         onStatus: (RuntimeStatus) -> Unit,
     ): Map<RuntimeAssetKind, File> = coroutineScope {
         cacheDir.mkdirs()
+        pruneStaleCacheFiles(assets)
         val total = assets.sumOf { it.size }
 
         synchronized(lock) {
@@ -69,6 +70,16 @@ class DownloadCoordinator(
                 }
             }
         }.awaitAll().toMap()
+    }
+
+    private fun pruneStaleCacheFiles(assets: List<RuntimeAsset>) {
+        val allowed = assets.flatMap { asset ->
+            listOf(asset.fileName, asset.fileName + ".part")
+        }.toSet()
+        cacheDir.listFiles()
+            ?.filter(File::isFile)
+            ?.filterNot { it.name in allowed }
+            ?.forEach(File::delete)
     }
 
     private fun existingBytes(asset: RuntimeAsset): Long {
