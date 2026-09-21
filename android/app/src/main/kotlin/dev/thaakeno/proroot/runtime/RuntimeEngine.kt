@@ -155,15 +155,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                 )
 
                 val failure = runCatching {
-                    installer.prepareInstalledRuntime()
-                    RuntimeEvents.publish(
-                        RuntimeStatus(
-                            phase = RuntimePhase.starting,
-                            message = "Starting KDE Plasma",
-                            installed = true,
-                        ),
-                    )
-                    startDesktopOnce()
+                    installer.prepareInstalledRuntime { stage ->
+                        publishStarting(stage)
+                    }
+                    startDesktopOnce(::publishStarting)
                 }.exceptionOrNull()
 
                 if (failure == null) {
@@ -179,11 +174,14 @@ class RuntimeEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun startDesktopOnce() {
+    private fun startDesktopOnce(onStage: (String) -> Unit) {
         paths.resetTransientState()
+        onStage("Starting display transport")
         daemon.start()
+        onStage("Starting system services")
         systemServices.start()
-        session.start(refreshRate, scale) { exitCode ->
+        onStage("Starting KDE Plasma")
+        session.start(refreshRate, scale, onStage = onStage) { exitCode ->
             if (RuntimeEvents.latest.phase == RuntimePhase.running) {
                 scope.launch {
                     mutex.withLock {
@@ -203,6 +201,17 @@ class RuntimeEngine private constructor(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun publishStarting(message: String) {
+        RuntimeEvents.publish(
+            RuntimeStatus(
+                phase = RuntimePhase.starting,
+                message = message,
+                installed = true,
+                running = false,
+            ),
+        )
     }
 
     private fun publishRunning(message: String) {

@@ -12,7 +12,12 @@ class DesktopSession(
     private var logThread: Thread? = null
 
     @Synchronized
-    fun start(refreshRate: Int, scale: Double, onExit: (Int) -> Unit) {
+    fun start(
+        refreshRate: Int,
+        scale: Double,
+        onStage: (String) -> Unit = {},
+        onExit: (Int) -> Unit,
+    ) {
         if (process?.isAlive == true) return
 
         val safeRefresh = refreshRate.coerceIn(60, 165)
@@ -45,8 +50,10 @@ class DesktopSession(
             start()
         }
 
+        onStage("Validating KDE desktop")
         waitForDesktopReady(started)
         if (safeScale != 1.0) {
+            onStage("Applying desktop settings")
             val result = applyScale(safeScale)
             if (!result.successful) {
                 File(paths.logsDir, "display-controls.log").appendText(

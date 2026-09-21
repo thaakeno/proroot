@@ -78,6 +78,29 @@ class RuntimeDiagnostics(
                     fakeRoot = false,
                     timeoutSeconds = 12,
                 ),
+                "dpkgHealth" to probe(
+                    """
+                    set +e
+                    printf 'status: '
+                    stat -c '%s bytes' /var/lib/dpkg/status 2>&1
+                    printf 'status-old: '
+                    stat -c '%s bytes' /var/lib/dpkg/status-old 2>&1
+                    printf 'packages: '
+                    dpkg-query -W 2>/dev/null | wc -l
+                    echo 'audit:'
+                    dpkg --audit 2>&1 || true
+                    echo 'pending updates:'
+                    find /var/lib/dpkg/updates -maxdepth 1 -type f -printf '%f %s\n' 2>/dev/null | sort | head -n 60
+                    echo 'backups:'
+                    ls -lht /var/backups/dpkg.status* 2>/dev/null | head -n 20 || true
+                    echo 'status targets:'
+                    readlink /var/lib/dpkg/status 2>/dev/null || true
+                    readlink /var/lib/dpkg/status-old 2>/dev/null || true
+                    exit 0
+                    """.trimIndent(),
+                    fakeRoot = true,
+                    timeoutSeconds = 8,
+                ),
                 "plasmaQmlRuntime" to probe(
                     """
                     set -e

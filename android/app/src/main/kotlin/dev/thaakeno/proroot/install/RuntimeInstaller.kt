@@ -333,15 +333,17 @@ class RuntimeInstaller(
         }
     }
 
-    fun prepareInstalledRuntime() {
+    fun prepareInstalledRuntime(onStage: (String) -> Unit = {}) {
         if (!paths.installMarker.isFile || !paths.rootfs.isDirectory) return
 
         installGuestScripts(paths.rootfs)
+        onStage("Repairing package links")
         repairLegacyMovedLinkTargets(paths.rootfs)
 
         val marker = File(paths.rootfs, RUNTIME_MAINTENANCE_MARKER)
         if (marker.isFile) return
 
+        onStage("Checking package database")
         val recoveredPackages = repairDpkgDatabaseIfNeeded(paths.rootfs)
         val preflight = installRunner.exec(
             command = """
@@ -364,18 +366,49 @@ class RuntimeInstaller(
                 "refusing to run APT and risk further rootfs damage."
         }
 
-        val result = installRunner.exec(
+        fun runMaintenanceStep(
+            stage: String,
+            timeoutSeconds: Long,
+            command: String,
+        ) {
+            onStage(stage)
+            val step = installRunner.exec(
+                command = command,
+                timeoutSeconds = timeoutSeconds,
+                rootfs = paths.rootfs,
+                fakeRoot = true,
+            )
+            journal.command(stage, step)
+            check(step.successful) {
+                "$stage failed via ${installRunner.runtimeId} " +
+                    "(exit ${step.exitCode}). See diagnostics for full output."
+            }
+        }
+
+        runMaintenanceStep(
+            stage = "Refreshing Debian package metadata",
+            timeoutSeconds = 300,
             command = """
                 set -e
                 rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
-
-                # Finish the interrupted transaction first. A partially configured package may
-                # fail until apt repairs dependencies, so the first configure pass is best-effort.
+                apt-get update
+            """.trimIndent(),
+        )
+        runMaintenanceStep(
+            stage = "Repairing interrupted packages",
+            timeoutSeconds = 600,
+            command = """
+                set -e
                 dpkg --configure -a || true
                 DEBIAN_FRONTEND=noninteractive apt-get -f install -y
                 dpkg --configure -a
-
-                apt-get update
+            """.trimIndent(),
+        )
+        runMaintenanceStep(
+            stage = "Installing Plasma runtime modules",
+            timeoutSeconds = 900,
+            command = """
+                set -e
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                     plasma-desktop plasma-workspace plasma-desktoptheme libplasma6 \
                     qml6-module-org-kde-plasma-plasma5support qml6-module-org-kde-ksvg \
@@ -385,7 +418,13 @@ class RuntimeInstaller(
                     plasma-desktoptheme qml6-module-org-kde-ksvg \
                     qml6-module-org-kde-plasma-plasma5support
                 dpkg --configure -a
-
+            """.trimIndent(),
+        )
+        runMaintenanceStep(
+            stage = "Verifying Plasma runtime",
+            timeoutSeconds = 120,
+            command = """
+                set -e
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/qmldir
                 test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/libcorebindingsplugin.so
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/qmldir
@@ -401,15 +440,7 @@ class RuntimeInstaller(
                 chown -R linux:linux /home/linux/.cache 2>/dev/null || true
                 update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
             """.trimIndent(),
-            timeoutSeconds = 900,
-            rootfs = paths.rootfs,
-            fakeRoot = true,
         )
-        journal.command("Applying repaired runtime compatibility maintenance", result)
-        check(result.successful) {
-            "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
-                "(exit ${result.exitCode}). See diagnostics for full output."
-        }
 
         marker.writeText("ok\n")
     }
@@ -606,27 +637,25 @@ class RuntimeInstaller(
             return currentCount
         }
 
-        val candidates = buildList {
-            add(File(dpkgDir, "status-old"))
-            File(rootfs, "var/backups").listFiles()
-                ?.filter { it.isFile && it.name.startsWith("dpkg.status") }
-                ?.sortedByDescending(File::lastModified)
-                ?.let(::addAll)
-        }.mapNotNull { source ->
-            val bytes = readDpkgStatusBytes(source) ?: return@mapNotNull null
+        fun healthySnapshot(source: File): DpkgStatusSnapshot? {
+            val bytes = readDpkgStatusBytes(source) ?: return null
             val packageCount = countDpkgPackages(bytes)
-            if (packageCount < MIN_HEALTHY_DPKG_PACKAGES) return@mapNotNull null
-            DpkgStatusSnapshot(
+            if (packageCount < MIN_HEALTHY_DPKG_PACKAGES) return null
+            return DpkgStatusSnapshot(
                 source = source,
                 bytes = bytes,
                 packageCount = packageCount,
             )
         }
 
-        val best = candidates.maxWithOrNull(
-            compareBy<DpkgStatusSnapshot> { it.packageCount }
-                .thenBy { it.source.lastModified() },
-        )
+        val statusOld = healthySnapshot(File(dpkgDir, "status-old"))
+        val newestBackup = File(rootfs, "var/backups").listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.name.startsWith("dpkg.status") }
+            ?.sortedByDescending(File::lastModified)
+            ?.mapNotNull(::healthySnapshot)
+            ?.firstOrNull()
+        val best = statusOld ?: newestBackup
         check(best != null) {
             "The Debian dpkg database is damaged (only $currentCount package records) " +
                 "and no healthy status backup was found. APT was not run, so the rootfs " +
