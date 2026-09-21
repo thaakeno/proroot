@@ -10,9 +10,11 @@ class ProrootRunner(
 ) {
     private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
     private val launcher = File(nativeDir, "libproroot.so")
+    private val procCompat = ProcCompatBridge(context, paths)
 
     init {
         check(launcher.isFile) { "libproroot.so is missing from nativeLibraryDir" }
+        procCompat.start()
     }
 
     fun command(
@@ -22,6 +24,8 @@ class ProrootRunner(
         fakeRoot: Boolean = true,
         extraEnvironment: Map<String, String> = emptyMap(),
     ): ProcessBuilder {
+        procCompat.refresh()
+
         val args = mutableListOf(
             launcher.absolutePath,
             "-r", rootfs.absolutePath,
@@ -32,9 +36,15 @@ class ProrootRunner(
             "-w", workingDirectory,
             "-b", "/dev:/dev",
             "-b", "/proc:/proc",
+            "-b", "${paths.procStat.absolutePath}:/proc/stat",
+            "-b", "${paths.procUptime.absolutePath}:/proc/uptime",
+            "-b", "${paths.procLoadavg.absolutePath}:/proc/loadavg",
+            "-b", "${paths.procVersion.absolutePath}:/proc/version",
+            "-b", "${paths.procVmstat.absolutePath}:/proc/vmstat",
             "-b", "/sys:/sys",
             "-b", "${paths.anlandDir.absolutePath}:/tmp/anland",
             "-b", "${paths.sharedDir.absolutePath}:/mnt/android",
+            "-b", "${paths.hostInfoFile.absolutePath}:/run/proroot-host-info",
             "/bin/bash", "-lc", shellCommand,
         )
 
