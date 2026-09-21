@@ -29,6 +29,7 @@ class DownloadCoordinator(
     companion object {
         private const val MAX_ATTEMPTS = 4
         private const val BUFFER_SIZE = 256 * 1024
+        private const val UI_EMIT_INTERVAL_NANOS = 250_000_000L
         private val CONTENT_RANGE = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""")
     }
 
@@ -38,6 +39,7 @@ class DownloadCoordinator(
     private var lastSampleNanos = System.nanoTime()
     private var lastSampleBytes = 0L
     private var lastSpeed = 0L
+    private var lastEmitNanos = 0L
 
     suspend fun downloadAll(
         assets: List<RuntimeAsset>,
@@ -52,6 +54,7 @@ class DownloadCoordinator(
             lastSampleBytes = progressById.values.sum()
             lastSampleNanos = System.nanoTime()
             lastSpeed = 0L
+            lastEmitNanos = 0L
         }
 
         assets.map { asset ->
@@ -77,7 +80,7 @@ class DownloadCoordinator(
     ): File {
         val target = asset.cacheFile(cacheDir)
         if (Hashing.verify(target, asset.sha256)) {
-            updateProgress(asset, asset.size, totalAll, onStatus)
+            updateProgress(asset, asset.size, totalAll, onStatus, force = true)
             return target
         }
         target.delete()
@@ -93,7 +96,7 @@ class DownloadCoordinator(
                 val partial = partialFile(asset)
                 if (partial.length() > asset.size || failure is ChecksumMismatch) {
                     partial.delete()
-                    updateProgress(asset, 0L, totalAll, onStatus)
+                    updateProgress(asset, 0L, totalAll, onStatus, force = true)
                 }
 
                 if (attempt == MAX_ATTEMPTS - 1) throw failure
@@ -118,13 +121,13 @@ class DownloadCoordinator(
 
         if (offset == asset.size && Hashing.verify(partial, asset.sha256)) {
             finalizePartial(partial, target, asset)
-            updateProgress(asset, asset.size, totalAll, onStatus)
+            updateProgress(asset, asset.size, totalAll, onStatus, force = true)
             return target
         }
         if (offset == asset.size) {
             partial.delete()
             offset = 0L
-            updateProgress(asset, 0L, totalAll, onStatus)
+            updateProgress(asset, 0L, totalAll, onStatus, force = true)
         }
 
         val request = Request.Builder()
@@ -135,7 +138,7 @@ class DownloadCoordinator(
         client.newCall(request).execute().use { response ->
             if (response.code == 416 && offset > 0) {
                 partial.delete()
-                updateProgress(asset, 0L, totalAll, onStatus)
+                updateProgress(asset, 0L, totalAll, onStatus, force = true)
                 error("Server rejected resume position for ${asset.id}")
             }
             check(response.isSuccessful) {
@@ -173,7 +176,7 @@ class DownloadCoordinator(
         }
 
         finalizePartial(partial, target, asset)
-        updateProgress(asset, asset.size, totalAll, onStatus)
+        updateProgress(asset, asset.size, totalAll, onStatus, force = true)
         return target
     }
 
@@ -194,7 +197,7 @@ class DownloadCoordinator(
 
         if (response.code == 200) {
             RandomAccessFile(partial, "rw").use { it.setLength(0L) }
-            updateProgress(asset, 0L, totalAll, onStatus)
+            updateProgress(asset, 0L, totalAll, onStatus, force = true)
             return 0L
         }
 
@@ -238,17 +241,30 @@ class DownloadCoordinator(
         bytes: Long,
         total: Long,
         onStatus: (RuntimeStatus) -> Unit,
+        force: Boolean = false,
     ) {
         val status = synchronized(lock) {
             progressById[asset.id] = bytes.coerceIn(0, asset.size)
             val now = System.nanoTime()
             val current = progressById.values.sum()
             val elapsed = (now - lastSampleNanos) / 1_000_000_000.0
+
             if (elapsed >= 0.25) {
-                lastSpeed = ((current - lastSampleBytes) / elapsed).toLong().coerceAtLeast(0)
+                lastSpeed = ((current - lastSampleBytes) / elapsed)
+                    .toLong()
+                    .coerceAtLeast(0)
                 lastSampleNanos = now
                 lastSampleBytes = current
             }
+
+            val shouldEmit = force ||
+                current >= total ||
+                now - lastEmitNanos >= UI_EMIT_INTERVAL_NANOS
+            if (!shouldEmit) {
+                return@synchronized null
+            }
+            lastEmitNanos = now
+
             RuntimeStatus(
                 phase = RuntimePhase.downloading,
                 progress = if (total == 0L) 0.0 else current.toDouble() / total,
@@ -258,7 +274,7 @@ class DownloadCoordinator(
                 speedBytesPerSecond = lastSpeed,
             )
         }
-        onStatus(status)
+        status?.let(onStatus)
     }
 
     private class ChecksumMismatch(message: String) : IllegalStateException(message)
