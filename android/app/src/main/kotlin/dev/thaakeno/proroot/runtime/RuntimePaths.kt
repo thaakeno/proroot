@@ -13,6 +13,7 @@ class RuntimePaths(context: Context) {
     val rootfsPrevious = File(machineDir, "rootfs.previous")
     val cacheDir = File(files, "runtime-cache")
     val tmpDir = File(files, "runtime-tmp")
+    val installProotLibDir = File(files, "install-proot-libs")
     val logsDir = File(files, "logs")
     val installLog = File(logsDir, "install.log")
     val previousInstallLog = File(logsDir, "install.previous.log")
@@ -44,6 +45,7 @@ class RuntimePaths(context: Context) {
             machineDir,
             cacheDir,
             tmpDir,
+            installProotLibDir,
             logsDir,
             anlandDir,
             sharedDir,
