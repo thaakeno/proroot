@@ -56,10 +56,6 @@ class RuntimeBridge {
     return raw.map((key, value) => MapEntry('$key', value));
   }
 
-  Future<void> setPerformanceProfile(String profile) {
-    return _method.invokeMethod<void>('setPerformanceProfile', {'profile': profile});
-  }
-
   Future<void> setDisplayOptions({
     required int refreshRate,
     required double scale,

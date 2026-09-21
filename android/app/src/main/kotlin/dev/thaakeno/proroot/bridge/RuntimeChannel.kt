@@ -119,12 +119,6 @@ class RuntimeChannel(
                 ),
             )
             "diagnostics" -> result.success(engine.diagnostics())
-            "setPerformanceProfile" -> {
-                engine.setPerformanceProfile(
-                    call.argument<String>("profile") ?: "balanced",
-                )
-                result.success(null)
-            }
             "setDisplayOptions" -> {
                 val refresh = call.argument<Number>("refreshRate")?.toInt() ?: 120
                 val scale = call.argument<Number>("scale")?.toDouble() ?: 1.0

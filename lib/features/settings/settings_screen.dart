@@ -59,24 +59,6 @@ class SettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               _Section(
-                title: 'Performance',
-                children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: controller.performanceProfile,
-                    decoration: const InputDecoration(labelText: 'Profile'),
-                    items: const [
-                      DropdownMenuItem(value: 'efficiency', child: Text('Efficiency')),
-                      DropdownMenuItem(value: 'balanced', child: Text('Balanced')),
-                      DropdownMenuItem(value: 'performance', child: Text('Performance')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) controller.setPerformanceProfile(value);
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _Section(
                 title: 'App',
                 children: [
                   SwitchListTile(

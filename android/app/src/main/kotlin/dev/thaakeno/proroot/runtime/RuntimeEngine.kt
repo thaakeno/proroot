@@ -34,7 +34,6 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
-    @Volatile private var performanceProfile = "balanced"
 
     init {
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
@@ -143,7 +142,12 @@ class RuntimeEngine private constructor(private val context: Context) {
     private fun startDesktopOnce() {
         paths.resetTransientState()
         daemon.start()
-        systemServices.start()
+        runCatching { systemServices.start() }
+            .onFailure { error ->
+                File(paths.logsDir, "system-services.log").appendText(
+                    "System services unavailable: ${error.stackTraceToString()}\n",
+                )
+            }
         session.start(refreshRate, scale) { exitCode ->
             if (RuntimeEvents.latest.phase != RuntimePhase.stopping) {
                 RuntimeEvents.publish(
@@ -209,6 +213,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                         installed = paths.installMarker.isFile,
                     ),
                 )
+                stopForegroundHost()
             }
         }
     }
@@ -225,6 +230,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 paths.installMarker.delete()
                 paths.previousInstallMarker.delete()
                 RuntimeEvents.publish(RuntimeStatus())
+                stopForegroundHost()
             }
         }
     }
@@ -259,13 +265,6 @@ class RuntimeEngine private constructor(private val context: Context) {
         this.scale = scale.coerceIn(0.75, 2.0)
     }
 
-    fun setPerformanceProfile(profile: String) {
-        performanceProfile = when (profile) {
-            "efficiency", "performance" -> profile
-            else -> "balanced"
-        }
-    }
-
     fun diagnostics(): Map<String, Any?> {
         val logFiles = paths.logsDir.listFiles()
             ?.filter(File::isFile)
@@ -282,7 +281,6 @@ class RuntimeEngine private constructor(private val context: Context) {
             "anlandDaemon" to daemon.isRunning(),
             "desktopProcess" to session.isRunning(),
             "desktopUid" to android.os.Process.myUid(),
-            "performanceProfile" to performanceProfile,
             "installedApps" to if (paths.installMarker.isFile) appCatalog.list().size else 0,
             "logs" to logFiles,
         )
@@ -294,5 +292,9 @@ class RuntimeEngine private constructor(private val context: Context) {
             Intent(context, LinuxRuntimeService::class.java)
                 .setAction(LinuxRuntimeService.ACTION_KEEP_ALIVE),
         )
+    }
+
+    private fun stopForegroundHost() {
+        context.stopService(Intent(context, LinuxRuntimeService::class.java))
     }
 }

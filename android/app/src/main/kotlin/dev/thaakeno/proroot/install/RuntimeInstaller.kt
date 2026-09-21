@@ -1,6 +1,7 @@
 package dev.thaakeno.proroot.install
 
 import android.content.Context
+import android.os.StatFs
 import android.system.Os
 import dev.thaakeno.proroot.runtime.ProrootRunner
 import dev.thaakeno.proroot.runtime.RuntimePaths
@@ -21,6 +22,7 @@ class RuntimeInstaller(
 
     suspend fun install(onStatus: (RuntimeStatus) -> Unit) {
         paths.ensureHostDirectories()
+        ensureFreeSpace()
         val assets = downloads.downloadAll(AssetCatalog.all, onStatus)
         val staging = paths.rootfsStaging
         val packageDir = File(staging, "opt/proroot-packages")
@@ -51,6 +53,16 @@ class RuntimeInstaller(
         paths.installMarker.writeText(
             "runtime=1\ndevice=${android.os.Build.DEVICE}\nuid=${android.os.Process.myUid()}\nabi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}\n"
         )
+    }
+
+    private fun ensureFreeSpace() {
+        val required = 7L * 1024L * 1024L * 1024L
+        val available = StatFs(paths.machineDir.absolutePath).availableBytes
+        check(available >= required) {
+            val availableGiB = available.toDouble() / 1024.0 / 1024.0 / 1024.0
+            "At least 7 GB of free internal storage is required; " +
+                "%.1f GB is currently available".format(availableGiB)
+        }
     }
 
     fun canRollback(): Boolean = paths.rootfsPrevious.isDirectory

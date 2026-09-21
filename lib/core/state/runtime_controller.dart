@@ -17,7 +17,6 @@ class RuntimeController extends ChangeNotifier {
   int refreshRate = 120;
   double desktopScale = 1.0;
   String inputMode = 'trackpad';
-  String performanceProfile = 'balanced';
 
   bool get busy => switch (snapshot.phase) {
         RuntimePhase.downloading ||
@@ -34,7 +33,6 @@ class RuntimeController extends ChangeNotifier {
     refreshRate = prefs.getInt('refreshRate') ?? 120;
     desktopScale = prefs.getDouble('desktopScale') ?? 1.0;
     inputMode = prefs.getString('inputMode') ?? 'trackpad';
-    performanceProfile = prefs.getString('performanceProfile') ?? 'balanced';
 
     _subscription = bridge.events.listen((next) {
       snapshot = next;
@@ -53,7 +51,6 @@ class RuntimeController extends ChangeNotifier {
     try {
       snapshot = await bridge.status();
       await _pushDisplayOptions();
-      await bridge.setPerformanceProfile(performanceProfile);
     } catch (_) {
       snapshot = snapshot.copyWith(
         phase: RuntimePhase.failed,
@@ -129,14 +126,6 @@ class RuntimeController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('inputMode', value);
     await _pushDisplayOptions();
-  }
-
-  Future<void> setPerformanceProfile(String value) async {
-    performanceProfile = value;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('performanceProfile', value);
-    await bridge.setPerformanceProfile(value);
   }
 
   Future<void> _pushDisplayOptions() {
