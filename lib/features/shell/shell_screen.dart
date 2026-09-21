@@ -61,45 +61,53 @@ class _ShellScreenState extends State<ShellScreen> {
       SettingsScreen(controller: controller),
     ];
 
-    return Scaffold(
-      body: SafeArea(
-        top: !_desktopSelected,
-        bottom: false,
-        child: IndexedStack(index: _index, children: pages),
+    return PopScope<Object?>(
+      canPop: !_desktopSelected,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _desktopSelected) {
+          _select(0);
+        }
+      },
+      child: Scaffold(
+        body: SafeArea(
+          top: !_desktopSelected,
+          bottom: false,
+          child: IndexedStack(index: _index, children: pages),
+        ),
+        bottomNavigationBar: _desktopSelected
+            ? null
+            : NavigationBar(
+                selectedIndex: _index,
+                onDestinationSelected: _select,
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.space_dashboard_outlined),
+                    selectedIcon: Icon(Icons.space_dashboard),
+                    label: 'Home',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.desktop_windows_outlined),
+                    selectedIcon: Icon(Icons.desktop_windows),
+                    label: 'Desktop',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.apps_outlined),
+                    selectedIcon: Icon(Icons.apps_rounded),
+                    label: 'Apps',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.downloading_outlined),
+                    selectedIcon: Icon(Icons.downloading),
+                    label: 'Setup',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.tune_outlined),
+                    selectedIcon: Icon(Icons.tune),
+                    label: 'Settings',
+                  ),
+                ],
+              ),
       ),
-      bottomNavigationBar: _desktopSelected
-          ? null
-          : NavigationBar(
-              selectedIndex: _index,
-              onDestinationSelected: _select,
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.space_dashboard_outlined),
-                  selectedIcon: Icon(Icons.space_dashboard),
-                  label: 'Home',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.desktop_windows_outlined),
-                  selectedIcon: Icon(Icons.desktop_windows),
-                  label: 'Desktop',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.apps_outlined),
-                  selectedIcon: Icon(Icons.apps_rounded),
-                  label: 'Apps',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.downloading_outlined),
-                  selectedIcon: Icon(Icons.downloading),
-                  label: 'Setup',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.tune_outlined),
-                  selectedIcon: Icon(Icons.tune),
-                  label: 'Settings',
-                ),
-              ],
-            ),
     );
   }
 }
