@@ -2,6 +2,7 @@ package dev.thaakeno.proroot.install
 
 import dev.thaakeno.proroot.runtime.RuntimePhase
 import dev.thaakeno.proroot.runtime.RuntimeStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -86,6 +87,7 @@ class DownloadCoordinator(
             try {
                 return downloadAttempt(asset, totalAll, onStatus)
             } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
                 lastFailure = failure
 
                 val partial = partialFile(asset)
