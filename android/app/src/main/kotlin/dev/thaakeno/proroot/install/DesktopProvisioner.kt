@@ -121,6 +121,18 @@ class DesktopProvisioner(
             """.trimIndent(),
         )
 
+        val plannedPackages = packageGroups
+            .flatMap { group -> group.packages.split(Regex("\\s+")) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(" ")
+
+        onProgress(ProvisioningStage(0.575, "Preflighting complete desktop dependencies", 450))
+        runChecked(
+            rootfs,
+            "DEBIAN_FRONTEND=noninteractive apt-get install -s -y --no-install-recommends $plannedPackages",
+        )
+
         packageGroups.forEach { group ->
             installPackageGroup(rootfs, group, onProgress)
         }
@@ -340,12 +352,12 @@ class DesktopProvisioner(
             set -e
             install -d -m 0755 /etc/apt/keyrings
 
-            curl -fsSLo /etc/apt/keyrings/brave-browser-archive-keyring.gpg \
+            install -d -m 0755 /usr/share/keyrings
+            curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg \
               https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
-            chmod 0644 /etc/apt/keyrings/brave-browser-archive-keyring.gpg
-            printf '%s\n' \
-              'deb [arch=arm64 signed-by=/etc/apt/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main' \
-              >/etc/apt/sources.list.d/brave-browser-release.list
+            chmod 0644 /usr/share/keyrings/brave-browser-archive-keyring.gpg
+            curl -fsSLo /etc/apt/sources.list.d/brave-browser-release.sources \
+              https://brave-browser-apt-release.s3.brave.com/brave-browser.sources
 
             curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
               | gpg --dearmor --yes -o /etc/apt/keyrings/packages.microsoft.gpg
