@@ -89,18 +89,17 @@ class DesktopProvisioner(
             set -e
             packages='$allPackages'
             missing=''
-            for package in ${'
-                if ! apt-cache show "${' >/dev/null 2>&1; then
-                    missing="${'
+            for package in ${'$'}packages; do
+                if ! apt-cache show "${'$'}package" >/dev/null 2>&1; then
+                    missing="${'$'}missing ${'$'}package"
                 fi
             done
-            if [ -n "${'; then
-                printf 'Missing Debian packages:%s\n' "${' >&2
+            if [ -n "${'$'}missing" ]; then
+                printf 'Missing Debian packages:%s\n' "${'$'}missing" >&2
                 exit 100
             fi
             """.trimIndent(),
         )
-
         packageGroups.forEach { group ->
             installPackageGroup(rootfs, group, onProgress)
         }
@@ -288,21 +287,21 @@ class DesktopProvisioner(
             set -e
             find /opt/proroot-packages -type f -name '*.deb' -print0 |
             while IFS= read -r -d '' deb; do
-                arch="$(dpkg-deb -f "$deb" Architecture)"
-                case "$arch" in
+                arch="$(dpkg-deb -f "${'$'}deb" Architecture)"
+                case "${'$'}arch" in
                     arm64|all)
                         ;;
                     aarch64)
                         work="$(mktemp -d)"
-                        fixed="$deb.fixed"
-                        dpkg-deb -R "$deb" "$work"
-                        sed -i 's/^Architecture:[[:space:]]*aarch64[[:space:]]*$/Architecture: arm64/' "$work/DEBIAN/control"
-                        dpkg-deb -b "$work" "$fixed" >/dev/null
-                        mv -f "$fixed" "$deb"
-                        rm -rf "$work"
+                        fixed="${'$'}deb.fixed"
+                        dpkg-deb -R "${'$'}deb" "${'$'}work"
+                        sed -i 's/^Architecture:[[:space:]]*aarch64[[:space:]]*${'$'}/Architecture: arm64/' "${'$'}work/DEBIAN/control"
+                        dpkg-deb -b "${'$'}work" "${'$'}fixed" >/dev/null
+                        mv -f "${'$'}fixed" "${'$'}deb"
+                        rm -rf "${'$'}work"
                         ;;
                     *)
-                        printf 'Unsupported staged Debian package architecture: %s (%s)\\n' "$arch" "$deb" >&2
+                        printf 'Unsupported staged Debian package architecture: %s (%s)\\n' "${'$'}arch" "${'$'}deb" >&2
                         exit 100
                         ;;
                 esac
@@ -310,7 +309,6 @@ class DesktopProvisioner(
             """.trimIndent(),
         )
     }
-
     private fun installPinnedDesktopStack(rootfs: File) {
         runChecked(rootfs, """
             set -e
