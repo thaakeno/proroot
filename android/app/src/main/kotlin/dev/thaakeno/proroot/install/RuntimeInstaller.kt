@@ -3,11 +3,19 @@ package dev.thaakeno.proroot.install
 import android.content.Context
 import android.os.StatFs
 import android.system.Os
+import dev.thaakeno.proroot.runtime.CommandResult
 import dev.thaakeno.proroot.runtime.GuestRunner
 import dev.thaakeno.proroot.runtime.RuntimePaths
 import dev.thaakeno.proroot.runtime.RuntimePhase
 import dev.thaakeno.proroot.runtime.RuntimeStatus
 import java.io.File
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.zip.GZIPInputStream
 
 class RuntimeInstaller(
     private val context: Context,
@@ -19,7 +27,9 @@ class RuntimeInstaller(
         private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
         private const val BASE_PROVISIONED_MARKER = ".proroot-base-provisioned"
         private const val GRAPHICS_INSTALLED_MARKER = ".proroot-graphics-installed"
-        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v3"
+        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v4"
+        private const val LINK_TARGETS_FIXED_MARKER = ".proroot-link-targets-v1"
+        private const val MIN_HEALTHY_DPKG_PACKAGES = 150
     }
     private val extractor = SafeArchiveExtractor()
     private val downloads = DownloadCoordinator(paths.cacheDir)
@@ -305,6 +315,12 @@ class RuntimeInstaller(
             check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
                 "Could not recover previous rootfs after interrupted activation"
             }
+            rewriteAbsoluteSymlinkTargets(
+                rootfs = paths.rootfs,
+                oldRootfs = paths.rootfsPrevious,
+                newRootfs = paths.rootfs,
+            )
+            File(paths.rootfs, LINK_TARGETS_FIXED_MARKER).writeText("ok\n")
             if (paths.previousInstallMarker.isFile) {
                 paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
                 paths.previousInstallMarker.delete()
@@ -321,28 +337,62 @@ class RuntimeInstaller(
         if (!paths.installMarker.isFile || !paths.rootfs.isDirectory) return
 
         installGuestScripts(paths.rootfs)
+        repairLegacyMovedLinkTargets(paths.rootfs)
 
         val marker = File(paths.rootfs, RUNTIME_MAINTENANCE_MARKER)
         if (marker.isFile) return
 
+        val recoveredPackages = repairDpkgDatabaseIfNeeded(paths.rootfs)
+        val preflight = installRunner.exec(
+            command = """
+                set -e
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+                package_count="$(dpkg-query -W -f='${binary:Package}\n' 2>/dev/null | wc -l)"
+                printf 'dpkg package records: %s\n' "$package_count"
+                test "$package_count" -ge $MIN_HEALTHY_DPKG_PACKAGES
+                dpkg --audit || true
+            """.trimIndent(),
+            timeoutSeconds = 60,
+            rootfs = paths.rootfs,
+            fakeRoot = true,
+        )
+        journal.command(
+            "Checking dpkg database before runtime maintenance (host records=$recoveredPackages)",
+            preflight,
+        )
+        check(preflight.successful) {
+            "The Debian package database is still unhealthy after recovery; " +
+                "refusing to run APT and risk further rootfs damage."
+        }
+
         val result = installRunner.exec(
             command = """
                 set -e
-                apt-get update
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+
+                # Finish the interrupted transaction first. A partially configured package may
+                # fail until apt repairs dependencies, so the first configure pass is best-effort.
+                dpkg --configure -a || true
                 DEBIAN_FRONTEND=noninteractive apt-get -f install -y
+                dpkg --configure -a
+
+                apt-get update
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                     plasma-desktop plasma-workspace plasma-desktoptheme libplasma6 \
                     qml6-module-org-kde-plasma-plasma5support qml6-module-org-kde-ksvg \
                     kscreen kde-config-screenlocker plasma-pa powerdevil \
                     xkb-data x11-xkb-utils libxcb-cursor0
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \
-                    plasma-desktoptheme qml6-module-org-kde-ksvg
+                    plasma-desktoptheme qml6-module-org-kde-ksvg \
+                    qml6-module-org-kde-plasma-plasma5support
                 dpkg --configure -a
 
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/qmldir
                 test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/libcorebindingsplugin.so
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/qmldir
                 test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/libcorebindingsplugin.so
+                dpkg-query -W plasma-desktoptheme qml6-module-org-kde-ksvg \
+                    qml6-module-org-kde-plasma-plasma5support
 
                 rm -rf \
                     /home/linux/.cache/qmlcache \
@@ -356,7 +406,7 @@ class RuntimeInstaller(
             rootfs = paths.rootfs,
             fakeRoot = true,
         )
-        journal.command("Applying runtime compatibility maintenance", result)
+        journal.command("Applying repaired runtime compatibility maintenance", result)
         check(result.successful) {
             "Runtime compatibility maintenance failed via ${installRunner.runtimeId} " +
                 "(exit ${result.exitCode}). See diagnostics for full output."
@@ -378,6 +428,12 @@ class RuntimeInstaller(
         check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
             "Could not restore previous rootfs"
         }
+        rewriteAbsoluteSymlinkTargets(
+            rootfs = paths.rootfs,
+            oldRootfs = paths.rootfsPrevious,
+            newRootfs = paths.rootfs,
+        )
+        File(paths.rootfs, LINK_TARGETS_FIXED_MARKER).writeText("ok\n")
 
         if (paths.previousInstallMarker.isFile) {
             paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
@@ -429,6 +485,12 @@ class RuntimeInstaller(
             check(paths.rootfs.renameTo(paths.rootfsPrevious)) {
                 "Could not preserve previous rootfs"
             }
+            rewriteAbsoluteSymlinkTargets(
+                rootfs = paths.rootfsPrevious,
+                oldRootfs = paths.rootfs,
+                newRootfs = paths.rootfsPrevious,
+            )
+            File(paths.rootfsPrevious, LINK_TARGETS_FIXED_MARKER).writeText("ok\n")
             if (paths.installMarker.isFile) {
                 paths.installMarker.copyTo(paths.previousInstallMarker, overwrite = true)
             }
@@ -436,10 +498,24 @@ class RuntimeInstaller(
 
         try {
             check(staging.renameTo(paths.rootfs)) { "Could not activate staged rootfs" }
+            rewriteAbsoluteSymlinkTargets(
+                rootfs = paths.rootfs,
+                oldRootfs = staging,
+                newRootfs = paths.rootfs,
+            )
+            File(paths.rootfs, LINK_TARGETS_FIXED_MARKER).writeText("ok\n")
         } catch (t: Throwable) {
             paths.rootfs.deleteRecursively()
             if (paths.rootfsPrevious.exists()) {
-                paths.rootfsPrevious.renameTo(paths.rootfs)
+                check(paths.rootfsPrevious.renameTo(paths.rootfs)) {
+                    "Could not restore previous rootfs after failed activation"
+                }
+                rewriteAbsoluteSymlinkTargets(
+                    rootfs = paths.rootfs,
+                    oldRootfs = paths.rootfsPrevious,
+                    newRootfs = paths.rootfs,
+                )
+                File(paths.rootfs, LINK_TARGETS_FIXED_MARKER).writeText("ok\n")
             }
             if (paths.previousInstallMarker.isFile) {
                 paths.previousInstallMarker.copyTo(paths.installMarker, overwrite = true)
@@ -448,6 +524,175 @@ class RuntimeInstaller(
             throw t
         }
     }
+
+    private fun repairLegacyMovedLinkTargets(rootfs: File) {
+        val marker = File(rootfs, LINK_TARGETS_FIXED_MARKER)
+        if (marker.isFile) return
+
+        var repaired = 0
+        repaired += rewriteAbsoluteSymlinkTargets(
+            rootfs = rootfs,
+            oldRootfs = paths.rootfsStaging,
+            newRootfs = rootfs,
+        )
+        repaired += rewriteAbsoluteSymlinkTargets(
+            rootfs = rootfs,
+            oldRootfs = paths.rootfsPrevious,
+            newRootfs = rootfs,
+        )
+        marker.writeText("ok\n")
+
+        journal.command(
+            "Repairing legacy PRoot link2symlink targets",
+            CommandResult(
+                exitCode = 0,
+                output = "rewrittenSymlinks=$repaired\n",
+            ),
+        )
+    }
+
+    private fun rewriteAbsoluteSymlinkTargets(
+        rootfs: File,
+        oldRootfs: File,
+        newRootfs: File,
+    ): Int {
+        val oldPath = oldRootfs.absolutePath.trimEnd('/')
+        val newPath = newRootfs.absolutePath.trimEnd('/')
+        if (oldPath == newPath || !rootfs.isDirectory) return 0
+
+        val oldPrefix = "$oldPath/"
+        var rewritten = 0
+
+        Files.walkFileTree(
+            rootfs.toPath(),
+            object : SimpleFileVisitor<Path>() {
+                override fun visitFile(
+                    file: Path,
+                    attrs: BasicFileAttributes,
+                ): FileVisitResult {
+                    if (!attrs.isSymbolicLink) return FileVisitResult.CONTINUE
+
+                    val originalTarget = runCatching {
+                        Files.readSymbolicLink(file)
+                    }.getOrNull() ?: return FileVisitResult.CONTINUE
+                    val original = originalTarget.toString()
+                    if (original != oldPath && !original.startsWith(oldPrefix)) {
+                        return FileVisitResult.CONTINUE
+                    }
+
+                    val replacement = newPath + original.removePrefix(oldPath)
+                    Files.delete(file)
+                    try {
+                        Files.createSymbolicLink(file, Paths.get(replacement))
+                    } catch (failure: Throwable) {
+                        runCatching {
+                            Files.createSymbolicLink(file, originalTarget)
+                        }
+                        throw failure
+                    }
+                    rewritten += 1
+                    return FileVisitResult.CONTINUE
+                }
+            },
+        )
+        return rewritten
+    }
+
+    private fun repairDpkgDatabaseIfNeeded(rootfs: File): Int {
+        val dpkgDir = File(rootfs, "var/lib/dpkg")
+        val status = File(dpkgDir, "status")
+        val currentBytes = readDpkgStatusBytes(status)
+        val currentCount = currentBytes?.let(::countDpkgPackages) ?: 0
+        if (currentCount >= MIN_HEALTHY_DPKG_PACKAGES) {
+            return currentCount
+        }
+
+        val candidates = buildList {
+            add(File(dpkgDir, "status-old"))
+            File(rootfs, "var/backups").listFiles()
+                ?.filter { it.isFile && it.name.startsWith("dpkg.status") }
+                ?.sortedByDescending(File::lastModified)
+                ?.let(::addAll)
+        }.mapNotNull { source ->
+            val bytes = readDpkgStatusBytes(source) ?: return@mapNotNull null
+            val packageCount = countDpkgPackages(bytes)
+            if (packageCount < MIN_HEALTHY_DPKG_PACKAGES) return@mapNotNull null
+            DpkgStatusSnapshot(
+                source = source,
+                bytes = bytes,
+                packageCount = packageCount,
+            )
+        }
+
+        val best = candidates.maxWithOrNull(
+            compareBy<DpkgStatusSnapshot> { it.packageCount }
+                .thenBy { it.source.lastModified() },
+        )
+        check(best != null) {
+            "The Debian dpkg database is damaged (only $currentCount package records) " +
+                "and no healthy status backup was found. APT was not run, so the rootfs " +
+                "was left untouched."
+        }
+
+        val recoveryDir = File(paths.logsDir, "dpkg-recovery").apply { mkdirs() }
+        currentBytes?.let { bytes ->
+            runCatching {
+                File(
+                    recoveryDir,
+                    "status-before-repair-${System.currentTimeMillis()}",
+                ).writeBytes(bytes)
+            }
+        }
+
+        writeDpkgStatus(status, best.bytes)
+        writeDpkgStatus(File(dpkgDir, "status-old"), best.bytes)
+
+        journal.command(
+            "Restoring damaged dpkg database",
+            CommandResult(
+                exitCode = 0,
+                output = buildString {
+                    append("oldPackageRecords=")
+                    append(currentCount)
+                    append('\n')
+                    append("restoredPackageRecords=")
+                    append(best.packageCount)
+                    append('\n')
+                    append("source=")
+                    append(best.source.absolutePath)
+                    append('\n')
+                },
+            ),
+        )
+        return best.packageCount
+    }
+
+    private fun readDpkgStatusBytes(file: File): ByteArray? =
+        runCatching {
+            if (file.name.endsWith(".gz")) {
+                GZIPInputStream(file.inputStream().buffered()).use { it.readBytes() }
+            } else {
+                file.readBytes()
+            }
+        }.getOrNull()
+
+    private fun countDpkgPackages(bytes: ByteArray): Int =
+        bytes.toString(Charsets.UTF_8)
+            .lineSequence()
+            .count { it.startsWith("Package: ") }
+
+    private fun writeDpkgStatus(file: File, bytes: ByteArray) {
+        Files.deleteIfExists(file.toPath())
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+        Os.chmod(file.absolutePath, 0x1A4)
+    }
+
+    private data class DpkgStatusSnapshot(
+        val source: File,
+        val bytes: ByteArray,
+        val packageCount: Int,
+    )
 
     private fun installStatus(
         phase: RuntimePhase,
