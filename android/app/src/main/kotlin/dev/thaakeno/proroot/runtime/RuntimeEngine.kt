@@ -25,17 +25,14 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
     private val paths = RuntimePaths(context).also { it.ensureHostDirectories() }
-    private val prorootRunner = ProrootRunner(context, paths)
-    private val prootRunner = ProotRunner(context, paths)
-    private val runner = RuntimeRunnerRouter(prorootRunner, prootRunner, paths)
+    private val runner = ProrootRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
     private val systemServices = SystemServicesSession(runner, paths)
     private val session = DesktopSession(runner, paths)
     private val installer = RuntimeInstaller(
         context = context,
         paths = paths,
-        installRunner = prootRunner,
-        runtimeRouter = runner,
+        runner = runner,
     )
     private val appCatalog = DesktopAppCatalog(paths)
     private val appLauncher = DesktopAppLauncher(runner, paths)
@@ -110,7 +107,6 @@ class RuntimeEngine private constructor(private val context: Context) {
         scope.launch {
             mutex.withLock {
                 if (session.isRunning()) return@withLock
-                runner.ensureSelected(paths.rootfs)
                 startForegroundHost()
                 try {
                     installer.install(RuntimeEvents::publish)
@@ -166,31 +162,6 @@ class RuntimeEngine private constructor(private val context: Context) {
                 session.stop()
                 systemServices.stop()
                 daemon.stop()
-
-                if (runner.runtimeId == "proroot") {
-                    runner.forceStable(
-                        "proroot desktop startup failed: ${firstFailure.message ?: firstFailure.javaClass.simpleName}",
-                    )
-                    RuntimeEvents.publish(
-                        RuntimeStatus(
-                            phase = RuntimePhase.starting,
-                            message = "Retrying KDE Plasma with compatibility runtime",
-                            detail = firstFailure.message,
-                            installed = true,
-                        ),
-                    )
-
-                    val fallbackFailure = runCatching { startDesktopOnce() }.exceptionOrNull()
-                    if (fallbackFailure == null) {
-                        publishRunning("KDE Plasma is running with compatibility runtime")
-                        return@withLock
-                    }
-
-                    session.stop()
-                    systemServices.stop()
-                    daemon.stop()
-                    firstFailure = fallbackFailure
-                }
 
                 if (installer.canRollback()) {
                     RuntimeEvents.publish(
@@ -319,8 +290,6 @@ class RuntimeEngine private constructor(private val context: Context) {
                 paths.rootfsPrevious.deleteRecursively()
                 paths.installMarker.delete()
                 paths.previousInstallMarker.delete()
-                paths.runtimeModeFile.delete()
-                paths.runtimeProbeLog.delete()
                 RuntimeEvents.publish(RuntimeStatus())
                 stopForegroundHost()
             }
