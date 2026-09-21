@@ -18,7 +18,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-dbus-daemon --system --nofork --nopidfile &
+dbus-daemon --nofork --nopidfile --config-file=/usr/local/lib/proroot/system-bus.conf &
 dbus_pid=$!
 
 attempts=80
