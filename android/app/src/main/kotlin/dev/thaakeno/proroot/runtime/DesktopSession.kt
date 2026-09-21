@@ -66,13 +66,18 @@ class DesktopSession(
 
     private fun waitForDesktopReady(started: Process) {
         val usersDir = File(paths.rootfs, "run/user")
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(40)
         var stableSince = 0L
+        var nextHealthProbe = 0L
+        var lastHealth = CommandResult(1, "Desktop health probe has not run yet")
 
         while (System.nanoTime() < deadline) {
-            check(started.isAlive) { "Plasma exited before the desktop became ready" }
+            check(started.isAlive) {
+                "Plasma exited before the desktop became ready. " +
+                    lastHealth.output.takeLast(2_000)
+            }
 
-            val ready = usersDir.listFiles()?.any { runtimeDir ->
+            val sessionPublished = usersDir.listFiles()?.any { runtimeDir ->
                 val envReady = File(runtimeDir, "proroot-session.env").isFile
                 val socketReady = runtimeDir.listFiles()?.any { file ->
                     file.name.startsWith("wayland-") &&
@@ -82,15 +87,36 @@ class DesktopSession(
                 envReady && socketReady
             } == true
 
-            if (ready) {
-                if (stableSince == 0L) stableSince = System.nanoTime()
-                if (System.nanoTime() - stableSince >= TimeUnit.MILLISECONDS.toNanos(500)) return
+            val now = System.nanoTime()
+            if (sessionPublished && now >= nextHealthProbe) {
+                lastHealth = health()
+                nextHealthProbe = now + TimeUnit.MILLISECONDS.toNanos(400)
+            }
+
+            if (sessionPublished && lastHealth.successful) {
+                if (stableSince == 0L) stableSince = now
+                if (now - stableSince >= TimeUnit.MILLISECONDS.toNanos(1_000)) return
             } else {
                 stableSince = 0L
             }
-            Thread.sleep(50)
+            Thread.sleep(75)
         }
-        error("Plasma did not publish a stable Wayland session within 30 seconds")
+
+        error(
+            "Plasma did not become healthy within 40 seconds. " +
+                lastHealth.output.takeLast(4_000),
+        )
+    }
+
+    fun health(): CommandResult {
+        if (process?.isAlive != true) {
+            return CommandResult(1, "Desktop supervisor is not running")
+        }
+        return runner.exec(
+            command = "/usr/local/lib/proroot/check-desktop-health.sh",
+            timeoutSeconds = 6,
+            fakeRoot = false,
+        )
     }
 
     @Synchronized
