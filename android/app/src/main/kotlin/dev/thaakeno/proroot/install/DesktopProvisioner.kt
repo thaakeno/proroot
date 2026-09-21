@@ -14,7 +14,7 @@ class DesktopProvisioner(
         rootfs: File,
         onProgress: (ProvisioningStage) -> Unit = {},
     ) {
-        onProgress(ProvisioningStage(0.45, "Checking proroot runtime"))
+        onProgress(ProvisioningStage(0.45, "Checking installer runtime"))
         runChecked(rootfs, "/bin/true")
 
         onProgress(ProvisioningStage(0.46, "Preparing Debian package sources"))
@@ -236,7 +236,7 @@ class DesktopProvisioner(
         )
         journal.command(command, result)
         check(result.successful) {
-            "Provisioning failed (exit ${result.exitCode}). Full output is in install.log."
+            "Provisioning failed via ${runner.runtimeId} (exit ${result.exitCode}). Full output is in install.log."
         }
     }
 }
