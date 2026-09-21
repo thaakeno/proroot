@@ -25,31 +25,80 @@ class RuntimeInstaller(
         paths.ensureHostDirectories()
         recoverInterruptedActivation()
         ensureFreeSpace()
-        val assets = downloads.downloadAll(AssetCatalog.all, onStatus)
+        val totalDownloadBytes = AssetCatalog.all.sumOf { it.size }
+        val assets = downloads.downloadAll(AssetCatalog.all) { status ->
+            onStatus(status.copy(progress = status.progress * 0.40))
+        }
         val staging = paths.rootfsStaging
         val packageDir = File(staging, "opt/proroot-packages")
 
-        onStatus(RuntimeStatus(RuntimePhase.extracting, 0.05, "Extracting Debian"))
+        onStatus(
+            installStatus(
+                phase = RuntimePhase.extracting,
+                progress = 0.42,
+                message = "Extracting Debian",
+                downloadedBytes = totalDownloadBytes,
+            ),
+        )
         staging.deleteRecursively()
         check(staging.mkdirs()) { "Could not create staging rootfs" }
         extractor.extractTarXz(requireAsset(assets, RuntimeAssetKind.ROOTFS), staging)
         installGuestScripts(staging)
 
+        onStatus(
+            installStatus(
+                phase = RuntimePhase.extracting,
+                progress = 0.44,
+                message = "Staging verified desktop packages",
+                downloadedBytes = totalDownloadBytes,
+            ),
+        )
         packageDir.mkdirs()
         stagePackage(requireAsset(assets, RuntimeAssetKind.ANLAND_GUEST), File(packageDir, "anland/anland.deb"))
         stagePackage(requireAsset(assets, RuntimeAssetKind.XWAYLAND_PACKAGE), File(packageDir, "xwayland/xwayland.deb"))
         stagePackage(requireAsset(assets, RuntimeAssetKind.BRAVE), File(packageDir, "brave/brave.deb"))
         extractor.extractZip(requireAsset(assets, RuntimeAssetKind.KWIN_PACKAGES), File(packageDir, "kwin"))
 
-        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.50, "Installing KDE Plasma and applications"))
-        provisioner.provisionBase(staging)
+        provisioner.provisionBase(staging) { stage ->
+            onStatus(
+                installStatus(
+                    phase = RuntimePhase.provisioning,
+                    progress = stage.progress,
+                    message = stage.message,
+                    downloadedBytes = totalDownloadBytes,
+                ),
+            )
+        }
 
-        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.88, "Installing pinned Adreno 840 graphics"))
+        onStatus(
+            installStatus(
+                phase = RuntimePhase.provisioning,
+                progress = 0.89,
+                message = "Installing pinned Adreno 840 graphics",
+                downloadedBytes = totalDownloadBytes,
+            ),
+        )
         extractor.extractTarGz(requireAsset(assets, RuntimeAssetKind.MESA_OVERLAY), staging)
+
+        onStatus(
+            installStatus(
+                phase = RuntimePhase.provisioning,
+                progress = 0.94,
+                message = "Verifying GPU and desktop compatibility",
+                downloadedBytes = totalDownloadBytes,
+            ),
+        )
         provisioner.finalizeGraphicsAndVerify(staging)
         File(staging, INTERNAL_READY_MARKER).writeText(markerContents("verified"))
 
-        onStatus(RuntimeStatus(RuntimePhase.provisioning, 0.98, "Activating verified Linux environment"))
+        onStatus(
+            installStatus(
+                phase = RuntimePhase.provisioning,
+                progress = 0.98,
+                message = "Activating verified Linux environment",
+                downloadedBytes = totalDownloadBytes,
+            ),
+        )
         activate(staging)
         paths.installMarker.writeText(markerContents("active"))
     }
@@ -162,6 +211,20 @@ class RuntimeInstaller(
             throw t
         }
     }
+
+    private fun installStatus(
+        phase: RuntimePhase,
+        progress: Double,
+        message: String,
+        downloadedBytes: Long,
+    ): RuntimeStatus = RuntimeStatus(
+        phase = phase,
+        progress = progress,
+        message = message,
+        downloadedBytes = downloadedBytes,
+        totalBytes = downloadedBytes,
+        speedBytesPerSecond = 0,
+    )
 
     private fun markerContents(state: String): String =
         buildString {
