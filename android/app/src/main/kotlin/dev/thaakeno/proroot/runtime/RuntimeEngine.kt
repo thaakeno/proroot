@@ -37,14 +37,28 @@ class RuntimeEngine private constructor(private val context: Context) {
     @Volatile private var scale = 1.0
 
     init {
+        val recoveryFailure = runCatching {
+            installer.recoverInterruptedActivation()
+        }.exceptionOrNull()
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
+
         RuntimeEvents.publish(
-            RuntimeStatus(
-                phase = if (installed) RuntimePhase.ready else RuntimePhase.missing,
-                message = if (installed) "Ready" else "Linux environment is not installed",
-                installed = installed,
-                running = false,
-            ),
+            if (recoveryFailure == null) {
+                RuntimeStatus(
+                    phase = if (installed) RuntimePhase.ready else RuntimePhase.missing,
+                    message = if (installed) "Ready" else "Linux environment is not installed",
+                    installed = installed,
+                    running = false,
+                )
+            } else {
+                RuntimeStatus(
+                    phase = RuntimePhase.failed,
+                    message = "Linux environment recovery failed",
+                    detail = recoveryFailure.stackTraceToString().takeLast(16_000),
+                    installed = installed,
+                    running = false,
+                )
+            },
         )
     }
 
