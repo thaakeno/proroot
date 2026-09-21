@@ -61,6 +61,37 @@ class InstallJournal(
         }
     }
 
+    fun commandStart(command: String) {
+        synchronized(lock) {
+            append(
+                buildString {
+                    appendLine()
+                    appendLine("===== command =====")
+                    appendLine(command)
+                    appendLine("----- live output -----")
+                },
+            )
+        }
+    }
+
+    fun commandOutput(line: String) {
+        synchronized(lock) {
+            append(line)
+            if (!line.endsWith("\n")) append("\n")
+        }
+    }
+
+    fun commandEnd(result: CommandResult) {
+        synchronized(lock) {
+            append("exit=${result.exitCode}\n")
+            appendLineSeparator()
+        }
+    }
+
+    private fun appendLineSeparator() {
+        append("----- end output -----\n")
+    }
+
     fun command(command: String, result: CommandResult) {
         synchronized(lock) {
             append(
