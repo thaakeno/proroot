@@ -32,6 +32,16 @@ class RuntimeEngine private constructor(private val context: Context) {
     private val installer = RuntimeInstaller(context, paths, runner)
     private val appCatalog = DesktopAppCatalog(paths)
     private val appLauncher = DesktopAppLauncher(runner, paths)
+    private val diagnosticsCollector = RuntimeDiagnostics(
+        context = context,
+        paths = paths,
+        runner = runner,
+        daemon = daemon,
+        systemServices = systemServices,
+        session = session,
+        installer = installer,
+        appCatalog = appCatalog,
+    )
 
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
@@ -289,26 +299,8 @@ class RuntimeEngine private constructor(private val context: Context) {
         }
     }
 
-    fun diagnostics(): Map<String, Any?> {
-        val logFiles = paths.logsDir.listFiles()
-            ?.filter(File::isFile)
-            ?.sortedByDescending(File::lastModified)
-            ?.take(20)
-            ?.associate { it.name to it.readText().takeLast(32_000) }
-            ?: emptyMap()
-        return mapOf(
-            "status" to status().asMap(),
-            "nativeLibraryDir" to context.applicationInfo.nativeLibraryDir,
-            "rootfs" to paths.rootfs.absolutePath,
-            "rollbackAvailable" to installer.canRollback(),
-            "anlandSocket" to paths.anlandSocket.absolutePath,
-            "anlandDaemon" to daemon.isRunning(),
-            "desktopProcess" to session.isRunning(),
-            "desktopUid" to android.os.Process.myUid(),
-            "installedApps" to if (paths.installMarker.isFile) appCatalog.list().size else 0,
-            "logs" to logFiles,
-        )
-    }
+    fun diagnostics(): Map<String, Any?> =
+        diagnosticsCollector.collect(status())
 
     private fun startForegroundHost() {
         ContextCompat.startForegroundService(
