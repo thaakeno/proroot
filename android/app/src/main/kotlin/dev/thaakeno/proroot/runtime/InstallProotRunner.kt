@@ -142,6 +142,7 @@ class InstallProotRunner(
         addBind(args, "/proc/self/fd", "/dev/fd")
 
         args += listOf(
+            "-b", "${paths.aptArchivesDir.absolutePath}:/var/cache/apt/archives",
             "-b", "${paths.shmDir.absolutePath}:/dev/shm",
             "-b", "${paths.procStat.absolutePath}:/proc/stat",
             "-b", "${paths.procUptime.absolutePath}:/proc/uptime",
@@ -180,6 +181,8 @@ class InstallProotRunner(
     @Synchronized
     private fun prepareDependencies() {
         paths.installProotLibDir.mkdirs()
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
         copyAlias(talloc, File(paths.installProotLibDir, "libtalloc.so.2"))
         copyAlias(androidShmem, File(paths.installProotLibDir, "libandroid-shmem.so"))
     }
