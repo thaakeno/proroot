@@ -90,6 +90,7 @@ class RuntimeInstaller(
             )
             verifyRootfsLayout(staging)
             installGuestScripts(staging)
+            adoptStagingAptCache(staging)
             repairLegacyFailedPackages(staging)
         } else {
             emit(
@@ -382,6 +383,24 @@ class RuntimeInstaller(
         File(staging, STAGING_RESUME_MARKER).writeText(
             "rootfsSha256=${rootfsAsset.sha256}\n",
         )
+    }
+
+    private fun adoptStagingAptCache(staging: File) {
+        val guestArchives = File(staging, "var/cache/apt/archives")
+        if (!guestArchives.isDirectory) return
+
+        paths.aptArchivesDir.mkdirs()
+        File(paths.aptArchivesDir, "partial").mkdirs()
+
+        guestArchives.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "deb" }
+            ?.forEach { source ->
+                val target = File(paths.aptArchivesDir, source.name)
+                if (!target.isFile || target.length() != source.length()) {
+                    source.copyTo(target, overwrite = true)
+                }
+            }
     }
 
     private fun repairLegacyFailedPackages(staging: File) {
