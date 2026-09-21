@@ -72,12 +72,12 @@ class RuntimeInstaller(
         val packageDir = File(staging, "opt/proroot-packages")
 
         val rootfsAsset = requireAsset(assets, RuntimeAssetKind.ROOTFS)
-        val rootfsDescriptor = AssetCatalog.all.first {
+        val rootfsSha256 = AssetCatalog.all.first {
             it.kind == RuntimeAssetKind.ROOTFS
-        }
+        }.sha256
         val resumeStaging = canResumeStaging(
             staging = staging,
-            rootfsAsset = rootfsDescriptor,
+            rootfsSha256 = rootfsSha256,
             allowLegacyFailedStaging = hadPreviousFailure,
         )
 
@@ -114,7 +114,7 @@ class RuntimeInstaller(
             verifyRootfsLayout(staging)
             installGuestScripts(staging)
         }
-        writeStagingMarker(staging, rootfsDescriptor)
+        writeStagingMarker(staging, rootfsSha256)
 
         emit(
             installStatus(
@@ -361,7 +361,7 @@ class RuntimeInstaller(
 
     private fun canResumeStaging(
         staging: File,
-        rootfsAsset: RuntimeAsset,
+        rootfsSha256: String,
         allowLegacyFailedStaging: Boolean,
     ): Boolean {
         if (!staging.isDirectory) return false
@@ -371,20 +371,18 @@ class RuntimeInstaller(
 
         val marker = File(staging, STAGING_RESUME_MARKER)
         if (marker.isFile) {
-            return marker.readText().contains("rootfsSha256=${rootfsAsset.sha256}")
+            return marker.readText().contains("rootfsSha256=$rootfsSha256")
         }
 
-        // Accept a valid staging tree from the immediately preceding failed build
-        // so an app update can resume instead of throwing away hundreds of packages.
         return allowLegacyFailedStaging
     }
 
     private fun writeStagingMarker(
         staging: File,
-        rootfsAsset: RuntimeAsset,
+        rootfsSha256: String,
     ) {
         File(staging, STAGING_RESUME_MARKER).writeText(
-            "rootfsSha256=${rootfsAsset.sha256}\n",
+            "rootfsSha256=$rootfsSha256\n",
         )
     }
 
@@ -410,48 +408,10 @@ class RuntimeInstaller(
         val result = installRunner.exec(
             command = """
                 set -e
-                if dpkg-query -W -f='${'
-                    | grep -qv '^ii '; then
-                    dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
-                fi
-                rm -f \
-                    /var/lib/dpkg/lock \
-                    /var/lib/dpkg/lock-frontend \
-                    /var/cache/apt/archives/lock
+                dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
+                rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
                 dpkg --configure -a || true
-                apt-get -f install -y || true
-            """.trimIndent(),
-            timeoutSeconds = 300,
-            rootfs = staging,
-            fakeRoot = true,
-        )
-        journal.command("Repairing resumable staging package state", result)
-    }
-
-    private fun markerContents(state: String): String =
-        buildString {
-            appendLine("runtime=1")
-            appendLine("state=$state")
-            appendLine("device=${android.os.Build.DEVICE}")
-            appendLine("uid=${android.os.Process.myUid()}")
-            appendLine("abi=${android.os.Build.SUPPORTED_ABIS.firstOrNull()}")
-        }
-
-    private fun requireAsset(
-        assets: Map<RuntimeAssetKind, File>,
-        kind: RuntimeAssetKind,
-    ): File = assets[kind] ?: error("Missing runtime asset: $kind")
-}
-}{db:Status-Abbrev}' brave-browser 2>/dev/null \
-                    | grep -qv '^ii '; then
-                    dpkg --remove --force-remove-reinstreq brave-browser >/dev/null 2>&1 || true
-                fi
-                rm -f \
-                    /var/lib/dpkg/lock \
-                    /var/lib/dpkg/lock-frontend \
-                    /var/cache/apt/archives/lock
-                dpkg --configure -a || true
-                apt-get -f install -y || true
+                DEBIAN_FRONTEND=noninteractive apt-get -f install -y || true
             """.trimIndent(),
             timeoutSeconds = 300,
             rootfs = staging,
