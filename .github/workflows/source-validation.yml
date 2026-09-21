@@ -1,0 +1,68 @@
+name: Source validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: source-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.5"
+          channel: stable
+          cache: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android native toolchain
+        run: |
+          sdkmanager             "platforms;android-36"             "build-tools;36.0.0"             "ndk;28.2.13676358"             "cmake;3.31.1"
+
+      - name: Resolve Flutter packages
+        run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze Dart
+        run: flutter analyze --fatal-infos
+
+      - name: Test Dart models
+        run: flutter test
+
+      - name: Validate guest scripts
+        run: |
+          bash -n android/app/src/main/assets/guest/start-desktop.sh
+          bash -n android/app/src/main/assets/guest/start-user-session.sh
+          bash -n android/app/src/main/assets/guest/start-system-services.sh
+          bash -n android/app/src/main/assets/guest/launch-desktop-app.sh
+          python3 -m py_compile android/app/src/main/assets/guest/host-upower-bridge.py
+
+      - name: Compile Android and native sources
+        working-directory: android
+        run: |
+          ./gradlew --no-daemon             :app:compileDebugKotlin             :app:externalNativeBuildDebug
