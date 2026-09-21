@@ -12,7 +12,7 @@ import java.io.File
 class RuntimeInstaller(
     private val context: Context,
     private val paths: RuntimePaths,
-    installRunner: GuestRunner,
+    private val installRunner: GuestRunner,
 ) {
     companion object {
         private const val INTERNAL_READY_MARKER = ".proroot-runtime-ready"
