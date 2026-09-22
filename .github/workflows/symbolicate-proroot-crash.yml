@@ -1,0 +1,67 @@
+name: Symbolicate ProRoot crash
+
+on:
+  push:
+    branches:
+      - debug/proroot-symbolicate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  symbolicate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install AArch64 binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-aarch64-linux-gnu
+
+      - name: Download exact Debian 13 glibc and debug symbols
+        run: |
+          set -euxo pipefail
+          base=https://ftp.debian.org/debian/pool/main/g/glibc
+          curl -fL "$base/libc6_2.41-12+deb13u4_arm64.deb" -o /tmp/libc6.deb
+          curl -fL "$base/libc6-dbg_2.41-12+deb13u4_arm64.deb" -o /tmp/libc6-dbg.deb
+          mkdir -p /tmp/libc /tmp/dbg
+          dpkg-deb -x /tmp/libc6.deb /tmp/libc
+          dpkg-deb -x /tmp/libc6-dbg.deb /tmp/dbg
+
+      - name: Symbolicate device crash
+        run: |
+          set -euxo pipefail
+          libc=/tmp/libc/usr/lib/aarch64-linux-gnu/libc.so.6
+          test -f "$libc"
+          build_id="$(aarch64-linux-gnu-readelf -n "$libc" | awk '/Build ID:/ {print $3; exit}')"
+          debug="/tmp/dbg/usr/lib/debug/.build-id/${build_id:0:2}/${build_id:2}.debug"
+          test -f "$debug"
+
+          {
+            echo "libc=$libc"
+            echo "build_id=$build_id"
+            echo "debug=$debug"
+            echo
+            echo "=== ELF / load segments ==="
+            aarch64-linux-gnu-readelf -lW "$libc" | grep -E 'LOAD|Entry'
+            echo
+            echo "=== Address candidates assuming libc base 0x70c9000000 ==="
+            for off in 0xd5020 0xd500c 0x6ea84 0x6f25c 0x6f33c; do
+              echo "--- $off ---"
+              aarch64-linux-gnu-addr2line -a -f -C -i -e "$debug" "$off"
+            done
+            echo
+            echo "=== Dynamic symbols around 0xd5020 ==="
+            aarch64-linux-gnu-nm -anC "$debug" | awk '$1 ~ /^[0-9a-fA-F]+$/ {v=strtonum("0x"$1); if (v >= 0xd3000 && v <= 0xd7000) print}' || true
+            echo
+            echo "=== Disassembly around 0xd5020 ==="
+            aarch64-linux-gnu-objdump -dC --start-address=0xd4f80 --stop-address=0xd5080 "$libc"
+          } | tee symbolicate.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proroot-symbolication
+          path: symbolicate.txt
