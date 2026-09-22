@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: stable-proroot-qml-startup-v8
+# rebuild marker: proroot-crash-capture-v9
 
 on:
   push:

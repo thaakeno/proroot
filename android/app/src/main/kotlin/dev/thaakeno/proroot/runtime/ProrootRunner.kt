@@ -144,6 +144,8 @@ class ProrootRunner(
             extraEnvironment = mapOf(
                 "PROROOT_LOG_APPEND" to
                     File(paths.logsDir, "proroot-crash.log").absolutePath,
+                "PROROOT_TRACE_KILL" to "1",
+                "PROROOT_TRACE_SIGSEGV_STACK" to "1",
             ),
         ).start()
 

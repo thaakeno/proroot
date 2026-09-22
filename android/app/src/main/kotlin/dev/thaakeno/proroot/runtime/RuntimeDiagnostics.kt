@@ -21,6 +21,15 @@ class RuntimeDiagnostics(
             ?.sortedByDescending(File::lastModified)
             ?.associate { it.name to it.readText() }
             ?: emptyMap()
+        val prorootCrashDumps = paths.prorootCrashDumps
+            .filter(File::isFile)
+            .associate { dump ->
+                dump.name to mapOf(
+                    "bytes" to dump.length(),
+                    "lastModified" to dump.lastModified(),
+                    "content" to dump.readText().take(250_000),
+                )
+            }
 
         val probes = if (installed) {
             linkedMapOf(
@@ -176,6 +185,7 @@ class RuntimeDiagnostics(
                 ".proroot-staging-resumable",
             ).isFile,
             "installLogBytes" to paths.installLog.takeIf { it.isFile }?.length().orZero(),
+            "prorootCrashDumps" to prorootCrashDumps,
             "probes" to probes,
             "logs" to logs,
         )

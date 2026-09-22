@@ -215,6 +215,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     }
 
     private fun startDesktopOnce(onStage: (String) -> Unit) {
+        paths.prorootCrashDumps.forEach(File::delete)
         paths.resetTransientState()
         listOf(
             "desktop-session.log",
@@ -321,6 +322,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                 detail = buildString {
                     if (recentLogs.isNotBlank()) {
                         appendLine(recentLogs)
+                        appendLine()
+                    }
+                    if (paths.prorootCrashDumps.any { it.isFile && it.length() > 0L }) {
+                        appendLine("ProRoot crash dump captured; see diagnostics.prorootCrashDumps.")
                         appendLine()
                     }
                     appendLine("===== startup exception =====")
