@@ -16,7 +16,8 @@ pulse_dir="${PULSE_RUNTIME_PATH:-$runtime/anland-pulse}"
 prepare_unique_qml_plugin() {
     local module="$1"
     local unique="$2"
-    local qml_root="${QML_IMPORT_PATH%%:*}"
+    local qml_import_path="${QML_IMPORT_PATH:-}"
+    local qml_root="${qml_import_path%%:*}"
 
     if [[ -z "$qml_root" || ! -d "$qml_root" ]]; then
         qml_root=/usr/lib/aarch64-linux-gnu/qt6/qml
