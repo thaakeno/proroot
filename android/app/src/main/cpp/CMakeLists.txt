@@ -12,7 +12,9 @@ FetchContent_Declare(
     GIT_SHALLOW FALSE
     PATCH_COMMAND
         git reset --hard ${ANLAND_GIT_TAG}
-        COMMAND git apply --whitespace=nowarn ${CMAKE_CURRENT_SOURCE_DIR}/anland-lifecycle.patch
+        COMMAND ${CMAKE_COMMAND}
+            -DANLAND_SOURCE=<SOURCE_DIR>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/patch-anland-lifecycle.cmake
     SOURCE_SUBDIR app/src/main/jni
 )
 FetchContent_MakeAvailable(anland)
