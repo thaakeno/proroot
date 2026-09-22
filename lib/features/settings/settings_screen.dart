@@ -90,6 +90,16 @@ class SettingsScreen extends StatelessWidget {
                     onChanged: controller.setDarkMode,
                   ),
                   const Divider(),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: controller.deviceInfoInLinux,
+                    title: const Text('Open device info inside Linux'),
+                    subtitle: const Text(
+                      'Use KDE Info Center for the desktop info button instead of the Android panel.',
+                    ),
+                    onChanged: controller.setDeviceInfoInLinux,
+                  ),
+                  const Divider(),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.monitor_heart_outlined),
@@ -109,14 +119,36 @@ class SettingsScreen extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.developer_board_rounded),
                     title: const Text('Device info'),
-                    subtitle: const Text('CPU, GPU, RAM, storage and system'),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            DeviceInfoScreen(controller: controller),
-                      ),
+                    subtitle: Text(
+                      controller.deviceInfoInLinux
+                          ? 'Open KDE Info Center inside Linux'
+                          : 'CPU, GPU, RAM, storage and system in the app',
                     ),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () async {
+                      if (controller.deviceInfoInLinux) {
+                        try {
+                          await controller.openLinuxDeviceInfo();
+                        } catch (error) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Could not open Linux device info: $error',
+                              ),
+                            ),
+                          );
+                        }
+                        return;
+                      }
+                      if (!context.mounted) return;
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              DeviceInfoScreen(controller: controller),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -126,8 +158,10 @@ class SettingsScreen extends StatelessWidget {
                 children: [
                   _InfoRow(
                     label: 'Version',
-                    value: '${BuildInfo.version} (${BuildInfo.build})',
+                    value: BuildInfo.version,
                   ),
+                  const SizedBox(height: 12),
+                  _InfoRow(label: 'Build', value: 'CI #${BuildInfo.build}'),
                   const SizedBox(height: 12),
                   _InfoRow(label: 'Commit', value: BuildInfo.shortGitSha),
                   const SizedBox(height: 12),
