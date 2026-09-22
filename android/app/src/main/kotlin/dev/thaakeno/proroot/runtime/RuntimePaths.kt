@@ -19,11 +19,21 @@ class RuntimePaths(context: Context) {
     val installLog = File(logsDir, "install.log")
     val previousInstallLog = File(logsDir, "install.previous.log")
     val lastInstallFailure = File(logsDir, "last-install-failure.log")
-    val prorootCrashDumps = listOf(
-        File(files, "proroot-sigsegv-maps.txt"),
-        File(files, "proroot-sigbus-maps.txt"),
-        File(files, "proroot-sigtrap-maps.txt"),
+    private val prorootCrashNames = listOf(
+        "proroot-sigsegv-maps.txt",
+        "proroot-sigbus-maps.txt",
+        "proroot-sigtrap-maps.txt",
     )
+    val prorootCrashDumps: List<File>
+        get() = listOf(
+            files,
+            machineDir,
+            File(rootfs, "home/linux"),
+            File(rootfs, "root"),
+            tmpDir,
+        ).flatMap { directory ->
+            prorootCrashNames.map { name -> File(directory, name) }
+        }
     val installInProgress = File(machineDir, ".installing")
     val anlandDir = File(files, "anland")
     val anlandSocket = File(anlandDir, "display_daemon.sock")
