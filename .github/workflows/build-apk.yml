@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-forensics-about-v12
+# rebuild marker: proroot-v128-kde-no-svc-patching-v1
 
 on:
   push:
