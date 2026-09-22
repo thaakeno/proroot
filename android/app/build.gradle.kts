@@ -74,6 +74,18 @@ android {
         jniLibs {
             useLegacyPackaging = true
             pickFirsts += setOf("**/libc++_shared.so")
+
+            // ProRoot v1.2.8 is a self-patching runtime. Keep the five upstream
+            // ELFs byte-for-byte intact; AGP's native-symbol stripping changes
+            // the shipped files and removes the symbol table we need for
+            // runtime patching/debugging.
+            keepDebugSymbols += setOf(
+                "**/libproroot.so",
+                "**/libproroot-runtime.so",
+                "**/libproroot-bridge.so",
+                "**/libproroot-linker.so",
+                "**/libproroot-stub-loader.so",
+            )
         }
     }
 
