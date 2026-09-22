@@ -30,6 +30,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     private var pendingSurfaceRestart: Runnable? = null
     private var pendingPointerWake: Runnable? = null
     private var consumerStarted = false
+    private var runtimeStopping = false
     private var surfaceWidth = 0
     private var surfaceHeight = 0
     private var surfaceFormat = 0
@@ -65,7 +66,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
+        if (runtimeStopping || width <= 0 || height <= 0) return
 
         if (consumerStarted &&
             width == surfaceWidth &&
@@ -102,6 +103,18 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         surfaceFormat = 0
     }
 
+    fun prepareForRuntimeStop() {
+        runtimeStopping = true
+        cancelPendingSurfaceRestart()
+        cancelPointerWake()
+        runCatching { releasePointerCapture() }
+
+        if (consumerStarted && lastButtons != 0) {
+            syncButtons(0)
+        }
+        stopConsumerForRuntime()
+    }
+
     fun stopConsumerForRuntime() {
         if (!consumerStarted) return
         val error = runCatching {
@@ -116,6 +129,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     fun dispose() {
+        runtimeStopping = true
         cancelPendingSurfaceRestart()
         cancelPointerWake()
         stopConsumerForRuntime()
@@ -128,6 +142,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         cancelPendingSurfaceRestart()
         val restart = Runnable {
             pendingSurfaceRestart = null
+            if (runtimeStopping) return@Runnable
             val surface = holder.surface
             if (!surface.isValid) return@Runnable
 
@@ -149,6 +164,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     private fun startConsumerSafely(surface: Surface, width: Int, height: Int) {
+        if (runtimeStopping || !surface.isValid) return
         val error = runCatching {
             startConsumer(surface, width, height)
         }.exceptionOrNull()
@@ -159,6 +175,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     private fun startConsumer(surface: Surface, width: Int, height: Int) {
+        check(!runtimeStopping) { "Display consumer is stopping" }
         paths.ensureHostDirectories()
         Native.nativeConfigure(paths.anlandSocket.absolutePath, false, "", "")
         Native.nativeSetCompatibleMode(false)
@@ -248,6 +265,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         sendHardwareKey(event, 1) || super.onKeyUp(keyCode, event)
 
     private fun sendHardwareKey(event: KeyEvent, action: Int): Boolean {
+        if (runtimeStopping || !consumerStarted) return false
         if (event.keyCode == KeyEvent.KEYCODE_BACK &&
             !event.isFromSource(InputDevice.SOURCE_KEYBOARD)
         ) {
@@ -264,6 +282,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (runtimeStopping || !consumerStarted) return true
         requestFocus()
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) return handleMouse(event)
         return when (options.inputMode) {
@@ -273,6 +292,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (runtimeStopping || !consumerStarted) return true
         if (!event.isFromSource(InputDevice.SOURCE_MOUSE) &&
             !event.isFromSource(InputDevice.SOURCE_TOUCHPAD)
         ) {
