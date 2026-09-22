@@ -2,6 +2,7 @@ package dev.thaakeno.proroot.display
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -10,8 +11,7 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.TextureView
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
@@ -22,14 +22,15 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.hypot
 
-class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
+class LinuxSurfaceView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
     private val paths = RuntimePaths(context)
     private val callbackBridge = AnlandCallbackBridge(context)
     private val inputMethod = context.getSystemService(InputMethodManager::class.java)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var pendingSurfaceRestart: Runnable? = null
+    private var pendingSurfaceStart: Runnable? = null
     private var pendingPointerWake: Runnable? = null
+    private var displaySurface: Surface? = null
     private var consumerStarted = false
     private var surfaceWidth = 0
     private var surfaceHeight = 0
@@ -50,59 +51,60 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         options = next
         if (consumerStarted) {
             Native.nativeSetRefreshRate(next.refreshRate.toFloat())
-            applyFrameRate(holder.surface, next.refreshRate)
+            displaySurface?.let { applyFrameRate(it, next.refreshRate) }
         }
     }
 
     init {
         setBackgroundColor(Color.BLACK)
+        isOpaque = true
         isFocusable = true
         isFocusableInTouchMode = true
-        holder.addCallback(this)
+        surfaceTextureListener = this
         DisplaySettings.addListener(optionsListener)
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
+    override fun onSurfaceTextureAvailable(
+        texture: SurfaceTexture,
+        width: Int,
+        height: Int,
+    ) {
         requestFocus()
+        scheduleSurfaceStart(texture, width, height)
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+    override fun onSurfaceTextureSizeChanged(
+        texture: SurfaceTexture,
+        width: Int,
+        height: Int,
+    ) {
         if (width <= 0 || height <= 0) return
 
-        if (consumerStarted &&
-            width == surfaceWidth &&
-            height == surfaceHeight &&
-            format == surfaceFormat
-        ) {
-            cancelPendingSurfaceRestart()
-            applyFrameRate(holder.surface, options.refreshRate)
+        if (consumerStarted) {
+            // Do not tear Anland down for Flutter/IME/navigation-bar animations.
+            // A TextureView scales the existing BufferQueue into its current bounds,
+            // so the Linux producer can keep one stable set of dma-bufs for the
+            // lifetime of this SurfaceTexture.
+            displaySurface?.let { applyFrameRate(it, options.refreshRate) }
             return
         }
 
-        if (!consumerStarted) {
-            surfaceWidth = width
-            surfaceHeight = height
-            surfaceFormat = format
-            startConsumerSafely(holder.surface, width, height)
-            return
-        }
-
-        // Flutter/IME animations can emit dozens of intermediate Surface sizes in
-        // a few seconds. Restarting Anland for every frame repeatedly tears down
-        // native render threads and was the last Android-process crash path seen
-        // in the device log. Keep rendering at the previous size and reconnect
-        // once the layout has been stable briefly.
-        scheduleSurfaceRestart(format, width, height)
+        scheduleSurfaceStart(texture, width, height)
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        cancelPendingSurfaceRestart()
+    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+        cancelPendingSurfaceStart()
         cancelPointerWake()
         stopConsumerForRuntime()
+        displaySurface?.release()
+        displaySurface = null
         surfaceWidth = 0
         surfaceHeight = 0
         surfaceFormat = 0
+        return true
     }
+
+    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
 
     fun stopConsumerForRuntime() {
         if (!consumerStarted) return
@@ -118,36 +120,44 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     fun dispose() {
-        cancelPendingSurfaceRestart()
+        cancelPendingSurfaceStart()
         cancelPointerWake()
+        surfaceTextureListener = null
         stopConsumerForRuntime()
+        displaySurface?.release()
+        displaySurface = null
         callbackBridge.dispose()
         DisplaySettings.removeListener(optionsListener)
-        holder.removeCallback(this)
     }
 
-    private fun scheduleSurfaceRestart(format: Int, width: Int, height: Int) {
-        cancelPendingSurfaceRestart()
-        val restart = Runnable {
-            pendingSurfaceRestart = null
-            val surface = holder.surface
-            if (!surface.isValid) return@Runnable
+    private fun scheduleSurfaceStart(texture: SurfaceTexture, width: Int, height: Int) {
+        if (width <= 0 || height <= 0 || consumerStarted) return
+        cancelPendingSurfaceStart()
 
-            stopConsumerForRuntime()
-            if (consumerStarted) return@Runnable
+        // Wait for the Android layout to settle before allocating Anland's dma-bufs.
+        // Once started, keep this exact BufferQueue alive until the TextureView itself
+        // is destroyed. Resize animations are presentation-only and must never call
+        // nativeStop/nativeStart.
+        val start = Runnable {
+            pendingSurfaceStart = null
+            if (consumerStarted || !isAvailable) return@Runnable
+            if (this@LinuxSurfaceView.surfaceTexture !== texture) return@Runnable
 
+            displaySurface?.release()
+            val surface = Surface(texture)
+            displaySurface = surface
             surfaceWidth = width
             surfaceHeight = height
-            surfaceFormat = format
+            surfaceFormat = 1
             startConsumerSafely(surface, width, height)
         }
-        pendingSurfaceRestart = restart
-        mainHandler.postDelayed(restart, 220L)
+        pendingSurfaceStart = start
+        mainHandler.postDelayed(start, 250L)
     }
 
-    private fun cancelPendingSurfaceRestart() {
-        pendingSurfaceRestart?.let(mainHandler::removeCallbacks)
-        pendingSurfaceRestart = null
+    private fun cancelPendingSurfaceStart() {
+        pendingSurfaceStart?.let(mainHandler::removeCallbacks)
+        pendingSurfaceStart = null
     }
 
     private fun startConsumerSafely(surface: Surface, width: Int, height: Int) {
