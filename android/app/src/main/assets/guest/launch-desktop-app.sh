@@ -2,28 +2,14 @@
 set -euo pipefail
 
 app_id="${1:?desktop id required}"
+[[ "$app_id" =~ ^[A-Za-z0-9._+-]+$ ]] || {
+    echo "invalid desktop id" >&2
+    exit 64
+}
+
 . /usr/local/lib/proroot/session-env.sh
 load_proroot_session_env
 
-# Keep app launches native-Wayland. Xwayland is intentionally not part of this
-# Android session because it currently hits Android seccomp under proroot.
-export MOZ_ENABLE_WAYLAND=1
-export ELECTRON_OZONE_PLATFORM_HINT=wayland
-
-case "$app_id" in
-    brave-browser|brave-browser-stable)
-        exec brave-browser-stable             --no-sandbox             --ozone-platform=wayland             --enable-features=WaylandWindowDecorations
-        ;;
-    firefox-esr|firefox)
-        exec env \
-            MOZ_DISABLE_CONTENT_SANDBOX=1 \
-            MOZ_DISABLE_RDD_SANDBOX=1 \
-            firefox-esr
-        ;;
-    code|code-url-handler)
-        exec code             --no-sandbox             --ozone-platform=wayland             --enable-features=WaylandWindowDecorations
-        ;;
-    *)
-        exec gtk-launch "$app_id"
-        ;;
-esac
+# Generic fallback only. Normal Apps-tab launches go through the persistent
+# KDE-session socket, so this path deliberately contains no per-app rewrites.
+exec gtk-launch "$app_id"
