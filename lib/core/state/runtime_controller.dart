@@ -17,6 +17,7 @@ class RuntimeController extends ChangeNotifier {
   int refreshRate = 120;
   double desktopScale = 1.0;
   String inputMode = 'trackpad';
+  bool deviceInfoInLinux = false;
 
   bool get busy => switch (snapshot.phase) {
         RuntimePhase.downloading ||
@@ -32,6 +33,7 @@ class RuntimeController extends ChangeNotifier {
     darkMode = prefs.getBool('darkMode') ?? true;
     refreshRate = prefs.getInt('refreshRate') ?? 120;
     desktopScale = prefs.getDouble('desktopScale') ?? 1.0;
+    deviceInfoInLinux = prefs.getBool('deviceInfoInLinux') ?? false;
 
     final savedInputMode = prefs.getString('inputMode') ?? 'trackpad';
     inputMode = switch (savedInputMode) {
@@ -81,6 +83,14 @@ class RuntimeController extends ChangeNotifier {
   Future<List<LinuxApp>> desktopApps() => bridge.desktopApps();
 
   Future<Map<String, dynamic>> deviceInfo() => bridge.deviceInfo();
+
+  Future<void> openLinuxDeviceInfo() async {
+    try {
+      await launchApp('org.kde.kinfocenter.desktop');
+    } catch (_) {
+      await launchApp('systemsettings.desktop');
+    }
+  }
 
   Future<void> launchApp(String desktopId) async {
     if (!snapshot.installed) {
@@ -137,6 +147,13 @@ class RuntimeController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('inputMode', inputMode);
     await _pushDisplayOptions();
+  }
+
+  Future<void> setDeviceInfoInLinux(bool value) async {
+    deviceInfoInLinux = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('deviceInfoInLinux', value);
   }
 
   Future<void> _pushDisplayOptions() {
