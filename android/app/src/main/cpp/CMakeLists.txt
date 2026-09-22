@@ -10,6 +10,9 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/lfdevs/anland-termux.git
     GIT_TAG ${ANLAND_GIT_TAG}
     GIT_SHALLOW FALSE
+    PATCH_COMMAND
+        git reset --hard ${ANLAND_GIT_TAG}
+        COMMAND git apply --whitespace=nowarn ${CMAKE_CURRENT_SOURCE_DIR}/anland-lifecycle.patch
     SOURCE_SUBDIR app/src/main/jni
 )
 FetchContent_MakeAvailable(anland)
