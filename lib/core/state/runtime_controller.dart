@@ -32,7 +32,15 @@ class RuntimeController extends ChangeNotifier {
     darkMode = prefs.getBool('darkMode') ?? true;
     refreshRate = prefs.getInt('refreshRate') ?? 120;
     desktopScale = prefs.getDouble('desktopScale') ?? 1.0;
-    inputMode = prefs.getString('inputMode') ?? 'trackpad';
+
+    final savedInputMode = prefs.getString('inputMode') ?? 'trackpad';
+    inputMode = switch (savedInputMode) {
+      'direct' || 'touch' => 'direct',
+      _ => 'trackpad',
+    };
+    if (savedInputMode != inputMode) {
+      await prefs.setString('inputMode', inputMode);
+    }
 
     _subscription = bridge.events.listen((next) {
       snapshot = next;
@@ -95,7 +103,8 @@ class RuntimeController extends ChangeNotifier {
     await bridge.showKeyboard();
   }
 
-  Future<bool> setPointerCapture(bool enabled) => bridge.setPointerCapture(enabled);
+  Future<bool> setPointerCapture(bool enabled) =>
+      bridge.setPointerCapture(enabled);
 
   Future<void> setDarkMode(bool value) async {
     darkMode = value;
@@ -121,10 +130,10 @@ class RuntimeController extends ChangeNotifier {
   }
 
   Future<void> setInputMode(String value) async {
-    inputMode = value;
+    inputMode = value == 'direct' || value == 'touch' ? 'direct' : 'trackpad';
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('inputMode', value);
+    await prefs.setString('inputMode', inputMode);
     await _pushDisplayOptions();
   }
 
