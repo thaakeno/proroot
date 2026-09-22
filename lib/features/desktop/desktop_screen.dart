@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
-import 'native_desktop_view.dart';
 
 class DesktopScreen extends StatefulWidget {
   const DesktopScreen({
@@ -17,12 +16,10 @@ class DesktopScreen extends StatefulWidget {
 
 class _DesktopScreenState extends State<DesktopScreen> {
   bool _controlsVisible = true;
-  bool _pointerCaptured = false;
 
-  Future<void> _togglePointerCapture() async {
-    final next = !_pointerCaptured;
-    final changed = await widget.controller.setPointerCapture(next);
-    if (changed && mounted) setState(() => _pointerCaptured = next);
+  Future<void> _toggleInputMode() async {
+    final next = widget.controller.inputMode == 'trackpad' ? 'direct' : 'trackpad';
+    await widget.controller.setInputMode(next);
   }
 
   void _showFailureDetails(RuntimeSnapshot snapshot) {
@@ -52,21 +49,22 @@ class _DesktopScreenState extends State<DesktopScreen> {
   @override
   Widget build(BuildContext context) {
     final snapshot = widget.controller.snapshot;
-    final keepSurfaceMounted =
-        snapshot.running || snapshot.phase == RuntimePhase.starting;
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (keepSurfaceMounted)
-          const Positioned.fill(child: NativeDesktopView())
-        else
+        if (!snapshot.running &&
+            snapshot.phase != RuntimePhase.starting &&
+            snapshot.phase != RuntimePhase.stopping &&
+            snapshot.phase != RuntimePhase.failed)
           Positioned.fill(
             child: _IdleDesktop(
               installed: snapshot.installed,
               onStart: widget.controller.start,
             ),
           ),
+        if (snapshot.phase == RuntimePhase.starting)
+          Positioned.fill(child: _StartupOverlay(snapshot: snapshot)),
         if (snapshot.phase == RuntimePhase.stopping)
           const Positioned.fill(
             child: _RuntimeOverlay(
@@ -143,15 +141,17 @@ class _DesktopScreenState extends State<DesktopScreen> {
                 icon: const Icon(Icons.keyboard_rounded),
               ),
               IconButton(
-                tooltip: _pointerCaptured ? 'Release mouse' : 'Capture mouse',
-                onPressed: _togglePointerCapture,
-                color: _pointerCaptured
+                tooltip: widget.controller.inputMode == 'trackpad'
+                    ? 'Trackpad mode · tap for direct touch'
+                    : 'Direct touch · tap for trackpad mode',
+                onPressed: _toggleInputMode,
+                color: widget.controller.inputMode == 'trackpad'
                     ? const Color(0xFF8DDBFF)
                     : Colors.white,
                 icon: Icon(
-                  _pointerCaptured
+                  widget.controller.inputMode == 'trackpad'
                       ? Icons.mouse_rounded
-                      : Icons.mouse_outlined,
+                      : Icons.touch_app_outlined,
                 ),
               ),
               IconButton(
@@ -222,6 +222,54 @@ class _IdleDesktop extends StatelessWidget {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StartupOverlay extends StatelessWidget {
+  const _StartupOverlay({required this.snapshot});
+
+  final RuntimeSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = snapshot.progress.clamp(0.0, 1.0);
+    return ColoredBox(
+      color: Theme.of(context).colorScheme.surface,
+      child: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 420),
+          margin: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Starting KDE Plasma',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              Text(snapshot.message),
+              const SizedBox(height: 16),
+              LinearProgressIndicator(
+                value: progress > 0 ? progress : null,
+                minHeight: 7,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ],
+          ),
         ),
       ),
     );
