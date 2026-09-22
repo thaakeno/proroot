@@ -55,46 +55,44 @@ class _DesktopScreenState extends State<DesktopScreen> {
     final keepSurfaceMounted =
         snapshot.running || snapshot.phase == RuntimePhase.starting;
 
-    return ColoredBox(
-      color: Colors.black,
-      child: Stack(
-        children: [
-          if (keepSurfaceMounted)
-            const Positioned.fill(child: NativeDesktopView())
-          else
-            Positioned.fill(
-              child: _IdleDesktop(
-                installed: snapshot.installed,
-                onStart: widget.controller.start,
-              ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (keepSurfaceMounted)
+          const Positioned.fill(child: NativeDesktopView())
+        else
+          Positioned.fill(
+            child: _IdleDesktop(
+              installed: snapshot.installed,
+              onStart: widget.controller.start,
             ),
-          if (snapshot.phase == RuntimePhase.starting)
-            Positioned.fill(
-              child: _StartupOverlay(snapshot: snapshot),
+          ),
+        if (snapshot.phase == RuntimePhase.starting)
+          Positioned.fill(
+            child: _StartupOverlay(snapshot: snapshot),
+          ),
+        if (snapshot.phase == RuntimePhase.stopping)
+          const Positioned.fill(
+            child: _RuntimeOverlay(
+              title: 'Stopping Linux',
+              subtitle: 'Closing the desktop and Linux services cleanly.',
+              showProgress: true,
             ),
-          if (snapshot.phase == RuntimePhase.stopping)
-            const Positioned.fill(
-              child: _RuntimeOverlay(
-                title: 'Stopping Linux',
-                subtitle: 'Closing the desktop and Linux services cleanly.',
-                showProgress: true,
-              ),
+          ),
+        if (snapshot.phase == RuntimePhase.failed)
+          Positioned.fill(
+            child: _FailureOverlay(
+              snapshot: snapshot,
+              onRetry: snapshot.installed
+                  ? widget.controller.start
+                  : widget.controller.install,
+              retryLabel: snapshot.installed ? 'Retry' : 'Retry setup',
+              onDetails: () => _showFailureDetails(snapshot),
             ),
-          if (snapshot.phase == RuntimePhase.failed)
-            Positioned.fill(
-              child: _FailureOverlay(
-                snapshot: snapshot,
-                onRetry: snapshot.installed
-                    ? widget.controller.start
-                    : widget.controller.install,
-                retryLabel: snapshot.installed ? 'Retry' : 'Retry setup',
-                onDetails: () => _showFailureDetails(snapshot),
-              ),
-            ),
-          if (snapshot.running)
-            _buildDesktopControls(),
-        ],
-      ),
+          ),
+        if (snapshot.running)
+          _buildDesktopControls(),
+      ],
     );
   }
 
@@ -245,9 +243,7 @@ class _StartupOverlay extends StatelessWidget {
     final percent = (progress * 100).round();
     final details = snapshot.stageDetail?.trim();
 
-    return ColoredBox(
-      color: const Color(0xA9000000),
-      child: Center(
+    return Center(
         child: Container(
           constraints: const BoxConstraints(maxWidth: 470),
           margin: const EdgeInsets.all(24),
@@ -327,7 +323,6 @@ class _StartupOverlay extends StatelessWidget {
             ],
           ),
         ),
-      ),
     );
   }
 }
@@ -345,9 +340,7 @@ class _RuntimeOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xA9000000),
-      child: Center(
+    return Center(
         child: Container(
           constraints: const BoxConstraints(maxWidth: 420),
           margin: const EdgeInsets.all(24),
@@ -385,7 +378,6 @@ class _RuntimeOverlay extends StatelessWidget {
             ],
           ),
         ),
-      ),
     );
   }
 }
@@ -405,9 +397,7 @@ class _FailureOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xD9000000),
-      child: Center(
+    return Center(
         child: Container(
           constraints: const BoxConstraints(maxWidth: 460),
           margin: const EdgeInsets.all(24),
@@ -464,7 +454,6 @@ class _FailureOverlay extends StatelessWidget {
             ],
           ),
         ),
-      ),
     );
   }
 }
