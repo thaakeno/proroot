@@ -3,6 +3,7 @@ package dev.thaakeno.proroot.runtime
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import dev.thaakeno.proroot.display.LinuxDisplayRegistry
 import dev.thaakeno.proroot.install.RuntimeInstaller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -199,6 +200,10 @@ class RuntimeEngine private constructor(private val context: Context) {
 
                 session.stop()
                 systemServices.stop()
+                // Stop the Android consumer while the Anland daemon is still alive.
+                // nativeStop() owns a live display_ctx and must be allowed to close
+                // that transport cleanly before the daemon socket disappears.
+                LinuxDisplayRegistry.stopConsumerAndAwait()
                 daemon.stop()
                 publishStartFailure(failure)
                 stopForegroundHost()
@@ -236,6 +241,9 @@ class RuntimeEngine private constructor(private val context: Context) {
                             ),
                         )
                         systemServices.stop()
+                        // Keep the daemon alive until the Android consumer has
+                        // disconnected; reversing this order caused nativeStop races.
+                        LinuxDisplayRegistry.stopConsumerAndAwait()
                         daemon.stop()
                         RuntimeEvents.publish(
                             RuntimeStatus(
@@ -359,6 +367,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                 // final ready status lets Flutter dispose the native view.
                 session.stop()
                 systemServices.stop()
+                // Stop the Android consumer while the Anland daemon is still alive.
+                // nativeStop() owns a live display_ctx and must be allowed to close
+                // that transport cleanly before the daemon socket disappears.
+                LinuxDisplayRegistry.stopConsumerAndAwait()
                 daemon.stop()
 
                 RuntimeEvents.publish(
@@ -395,6 +407,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                 )
                 session.stop()
                 systemServices.stop()
+                // Stop the Android consumer while the Anland daemon is still alive.
+                // nativeStop() owns a live display_ctx and must be allowed to close
+                // that transport cleanly before the daemon socket disappears.
+                LinuxDisplayRegistry.stopConsumerAndAwait()
                 daemon.stop()
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()

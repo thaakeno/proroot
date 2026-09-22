@@ -74,6 +74,7 @@ wireplumber_pid=""
 pulse_pid=""
 session_pid=""
 launcher_pid=""
+shell_supervisor_pid=""
 
 cleanup_audio() {
     stop_pid "$pulse_pid"
@@ -83,6 +84,7 @@ cleanup_audio() {
 }
 
 cleanup_session() {
+    stop_pid "$shell_supervisor_pid"
     stop_pid "$launcher_pid"
     rm -f "$runtime/proroot-app-launcher.sock"
     stop_pid "$session_pid"
@@ -174,10 +176,7 @@ kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0.65 >
 
 /usr/local/lib/proroot/check-qml-runtime.sh --files-only
 
-plasma_ready() {
-    [[ -n "$session_pid" ]] || return 1
-    kill -0 "$session_pid" >/dev/null 2>&1 || return 1
-    find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q . || return 1
+plasmashell_owned() {
     dbus-send \
         --session \
         --print-reply=literal \
@@ -185,6 +184,41 @@ plasma_ready() {
         /org/freedesktop/DBus \
         org.freedesktop.DBus.NameHasOwner \
         string:org.kde.plasmashell 2>/dev/null | grep -q 'true'
+}
+
+plasma_ready() {
+    [[ -n "$session_pid" ]] || return 1
+    kill -0 "$session_pid" >/dev/null 2>&1 || return 1
+    find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q . || return 1
+    plasmashell_owned
+}
+
+supervise_plasmashell() {
+    local missing_since=0
+    while [[ -n "$session_pid" ]] && kill -0 "$session_pid" >/dev/null 2>&1; do
+        if plasmashell_owned; then
+            missing_since=0
+        else
+            missing_since=$((missing_since + 1))
+            # Ignore short D-Bus churn, but never leave the user staring at a
+            # black wallpaper with surviving application windows. Once the shell
+            # has genuinely disappeared, restart only plasmashell; KWin and all
+            # applications stay untouched.
+            if [[ "$missing_since" -ge 2 ]]; then
+                printf '%s plasmashell disappeared; restarting shell\n' "$(date -Is)" \
+                    >>"$log_dir/plasmashell-supervisor.log"
+                plasmashell --replace \
+                    >>"$log_dir/plasmashell-supervisor.log" 2>&1 &
+                for _ in {1..50}; do
+                    plasmashell_owned && break
+                    sleep 0.1
+                done
+                missing_since=0
+                sleep 2
+            fi
+        fi
+        sleep 1
+    done
 }
 
 wait_for_plasma() {
@@ -213,6 +247,16 @@ if ! wait_for_plasma 300; then
     exit 70
 fi
 
+wayland_socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit)"
+if [[ -z "$wayland_socket" ]]; then
+    echo "KWin published no Wayland socket" >&2
+    exit 71
+fi
+export WAYLAND_DISPLAY="${wayland_socket##*/}"
+
+supervise_plasmashell &
+shell_supervisor_pid=$!
+
 # Start desktop media services only after KWin has published Wayland and
 # plasmashell owns its D-Bus name. Starting them earlier can D-Bus-activate the
 # KDE portal before a compositor exists, producing repeated wl_display failures.
@@ -229,9 +273,7 @@ fi
 # Launch Android-requested apps from this exact KDE session instead of spawning
 # a second ProRoot runtime. This keeps Wayland, DBus, audio and GPU environment
 # identical to launching the same icon from Plasma.
-wayland_socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit)"
 if [[ -n "$wayland_socket" ]]; then
-    export WAYLAND_DISPLAY="${wayland_socket##*/}"
     /usr/local/lib/proroot/desktop-launcher-bridge.py         >"$log_dir/desktop-launcher.log" 2>&1 &
     launcher_pid=$!
     for _ in {1..40}; do

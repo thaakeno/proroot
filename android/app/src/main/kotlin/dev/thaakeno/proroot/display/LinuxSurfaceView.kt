@@ -58,6 +58,15 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     init {
+        // Android 14+ normally destroys a SurfaceView's BufferQueue whenever the
+        // view becomes temporarily invisible. Flutter tab/overlay transitions can
+        // trigger that without detaching the platform view, which used to drop the
+        // Anland consumer and leave a black frame even though KWin was still alive.
+        // Tie the Surface to actual window attachment instead.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            setSurfaceLifecycle(SURFACE_LIFECYCLE_FOLLOWS_ATTACHMENT)
+        }
+
         isFocusable = true
         isFocusableInTouchMode = true
         keepScreenOn = true
