@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-textureview-stable-surface-v8
+# rebuild marker: proroot-v128-surfaceview-skia-host-texture-v9
 
 on:
   push:
