@@ -16,6 +16,7 @@ import android.view.inputmethod.InputMethodManager
 import com.anland.termux.KeyCodeMapper
 import com.anland.termux.Native
 import dev.thaakeno.proroot.runtime.RuntimePaths
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -88,8 +89,17 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     fun stopConsumerForRuntime() {
         if (!consumerStarted) return
-        Native.nativeStop()
-        consumerStarted = false
+        val error = runCatching {
+            Native.nativeStop()
+        }.exceptionOrNull()
+        if (error == null) {
+            consumerStarted = false
+            return
+        }
+
+        File(paths.logsDir, "anland-consumer.log").appendText(
+            "nativeStop failed: ${error.stackTraceToString()}\n",
+        )
     }
 
     fun dispose() {
