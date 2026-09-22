@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-minimal-plasma-safe-teardown-v4
+# rebuild marker: proroot-v128-minimal-plasma-readiness-v5
 
 on:
   push:
