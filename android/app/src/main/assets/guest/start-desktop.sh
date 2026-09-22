@@ -35,8 +35,13 @@ export XDG_CURRENT_DESKTOP=KDE
 export XDG_SESSION_DESKTOP=KDE
 export XDG_SESSION_TYPE=wayland
 export QT_QPA_PLATFORM=wayland
-export QML_IMPORT_PATH=/usr/lib/aarch64-linux-gnu/qt6/qml
-export QML2_IMPORT_PATH=/usr/lib/aarch64-linux-gnu/qt6/qml
+qml_root="$(qtpaths6 --query QT_INSTALL_QML 2>/dev/null || true)"
+if [[ -n "$qml_root" && -d "$qml_root" ]]; then
+    export QML_IMPORT_PATH="$qml_root"
+    export QML2_IMPORT_PATH="$qml_root"
+fi
+export QML_IMPORT_TRACE=1
+export QT_DEBUG_PLUGINS=1
 
 export GDK_BACKEND=wayland
 export SDL_VIDEODRIVER=wayland
@@ -53,6 +58,7 @@ if [[ -r /dev/kgsl-3d0 ]]; then
     export TURNIP_KMD=kgsl
     export GALLIUM_DRIVER=freedreno
     export FD_FORCE_KGSL=1
+    export XWAYLAND_FORCE_KGSL_SURFACELESS=1
 fi
 
 export PROROOT_REFRESH_HZ="$refresh"
