@@ -37,7 +37,7 @@ class RuntimeEngine private constructor(private val context: Context) {
         installRunner = installRunner,
     )
     private val appCatalog = DesktopAppCatalog(paths)
-    private val appLauncher = DesktopAppLauncher(runner, paths)
+    private val appLauncher = DesktopAppLauncher(paths)
     private val diagnosticsCollector = RuntimeDiagnostics(
         context = context,
         paths = paths,
