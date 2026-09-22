@@ -11,9 +11,10 @@ test -f "$qml_root/org/kde/ksvg/qmldir"
 test -r "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so"
 test -r "$qml_root/org/kde/ksvg/libcorebindingsplugin.so"
 
-pgrep -x kwin_wayland >/dev/null
-pgrep -x plasmashell >/dev/null
-
+# DesktopSession already verifies that both sides of the Anland transport are
+# connected. Inside the guest, the Wayland socket plus plasmashell owning its
+# D-Bus name are the stable readiness signals. Avoid procps/kscreen probes here:
+# they add unrelated raw-syscall and service dependencies to the critical path.
 test -n "${WAYLAND_DISPLAY:-}"
 test -S "${XDG_RUNTIME_DIR:?}/$WAYLAND_DISPLAY"
 
@@ -24,14 +25,3 @@ dbus-send \
     /org/freedesktop/DBus \
     org.freedesktop.DBus.NameHasOwner \
     string:org.kde.plasmashell 2>/dev/null | grep -q 'true'
-
-dbus-send \
-    --system \
-    --print-reply \
-    --dest=org.freedesktop.DBus \
-    /org/freedesktop/DBus \
-    org.freedesktop.DBus.Peer.Ping >/dev/null
-
-kscreen-doctor -j > /tmp/proroot-desktop-health.json
-grep -q '"connected": true' /tmp/proroot-desktop-health.json
-grep -q '"enabled": true' /tmp/proroot-desktop-health.json
