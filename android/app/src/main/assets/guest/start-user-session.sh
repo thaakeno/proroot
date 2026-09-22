@@ -122,7 +122,14 @@ export PULSE_SERVER="unix:$pulse_dir/native"
 # Prefer native Wayland for browser/Electron families globally. This is session
 # policy, not an Apps-tab per-application rewrite.
 export MOZ_ENABLE_WAYLAND=1
+export MOZ_FAKE_NO_SANDBOX=1
 export ELECTRON_OZONE_PLATFORM_HINT=wayland
+
+# Build capability-based desktop overrides once per session. This makes apps
+# started by Plasma and apps started from Android use the same compatibility
+# path instead of maintaining app-specific launch commands.
+python3 /usr/local/lib/proroot/prepare-app-runtime.py     >"$log_dir/app-runtime-compat.log" 2>&1 || true
+update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
 env XDG_CONFIG_HOME="$pipewire_config" pipewire >"$log_dir/pipewire.log" 2>&1 &
 pipewire_pid=$!
@@ -153,7 +160,7 @@ persist_env() {
         GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
         ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
-        FD_FORCE_KGSL PROROOT_REFRESH_HZ         MOZ_ENABLE_WAYLAND ELECTRON_OZONE_PLATFORM_HINT
+        FD_FORCE_KGSL PROROOT_REFRESH_HZ         MOZ_ENABLE_WAYLAND MOZ_FAKE_NO_SANDBOX ELECTRON_OZONE_PLATFORM_HINT
     do
         persist_env "$name"
     done
@@ -163,8 +170,9 @@ chmod 0600 "$env_file"
 xdg-user-dirs-update >/dev/null 2>&1 || true
 kwriteconfig6 --file startkderc --group General --key systemdBoot false >/dev/null 2>&1 || true
 
-# This is a phone-hosted compositor with a software Qt Quick path. Avoid desktop
-# effects/indexers that burn CPU/GPU for almost no value on a 1200px mobile view.
+# Keep desktop overhead low. The Anland compositor and Linux applications keep
+# their KGSL/Freedreno hardware path; these settings only remove expensive shell
+# effects and indexing that add little value on a phone-sized display.
 kwriteconfig6 --file baloofilerc --group "Basic Settings" --key Indexing-Enabled false >/dev/null 2>&1 || true
 kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled false >/dev/null 2>&1 || true
 kwriteconfig6 --file kwinrc --group Plugins --key contrastEnabled false >/dev/null 2>&1 || true
