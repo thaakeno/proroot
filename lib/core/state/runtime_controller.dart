@@ -80,6 +80,8 @@ class RuntimeController extends ChangeNotifier {
 
   Future<List<LinuxApp>> desktopApps() => bridge.desktopApps();
 
+  Future<Map<String, dynamic>> deviceInfo() => bridge.deviceInfo();
+
   Future<void> launchApp(String desktopId) async {
     if (!snapshot.installed) {
       throw StateError('Linux is not installed');
