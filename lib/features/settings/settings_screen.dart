@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/build_info.dart';
 import '../../core/state/runtime_controller.dart';
 import '../diagnostics/diagnostics_screen.dart';
 
@@ -82,7 +83,50 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ],
               ),
+              const SizedBox(height: 14),
+              _Section(
+                title: 'About',
+                children: [
+                  _InfoRow(
+                    label: 'Version',
+                    value: '${BuildInfo.version} (${BuildInfo.build})',
+                  ),
+                  const SizedBox(height: 12),
+                  _InfoRow(label: 'Commit', value: BuildInfo.shortGitSha),
+                  const SizedBox(height: 12),
+                  _InfoRow(
+                    label: 'Linux runtime',
+                    value: 'ProRoot ${BuildInfo.prorootVersion}',
+                  ),
+                ],
+              ),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(label, style: Theme.of(context).textTheme.labelLarge),
+        ),
+        Expanded(
+          child: SelectableText(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700),
           ),
         ),
       ],
