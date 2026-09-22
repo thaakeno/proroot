@@ -90,8 +90,10 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           }
 
           final data = snapshot.data ?? const <String, dynamic>{};
-          final fullText = _fullText(data);
           final logs = data['logs'];
+          final crashDumps = data['prorootCrashDumps'];
+          final crashDumpEntries =
+              crashDumps is Map ? crashDumps.entries.toList(growable: false) : const [];
           final logEntries =
               logs is Map ? logs.entries.toList(growable: false) : const [];
 
@@ -101,6 +103,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
               FilledButton.icon(
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
+                  final fullText = _fullText(data);
                   await Clipboard.setData(ClipboardData(text: fullText));
                   if (!mounted) return;
                   messenger.showSnackBar(
@@ -133,7 +136,8 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                           .where(
                             (entry) =>
                                 entry.key != 'logs' &&
-                                entry.key != 'probes',
+                                entry.key != 'probes' &&
+                                entry.key != 'prorootCrashDumps',
                           )
                           .map(
                             (entry) => Padding(
@@ -184,6 +188,41 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                 ),
               if (data['probes'] case final Map probes when probes.isNotEmpty)
                 const SizedBox(height: 14),
+              if (crashDumpEntries.isNotEmpty) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ProRoot crash maps captured',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        ...crashDumpEntries.map((entry) {
+                          final value = entry.value;
+                          final bytes = value is Map ? value['bytes'] : null;
+                          return Text(
+                            bytes is num
+                                ? '${entry.key} • ${_size(bytes.toInt())}'
+                                : '${entry.key}',
+                          );
+                        }),
+                        const SizedBox(height: 8),
+                        Text(
+                          'The full maps are included by Copy full diagnostics. '
+                          'They are not rendered here to keep this screen stable.',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
               Text(
                 'Full logs',
                 style: Theme.of(context)
@@ -226,12 +265,21 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-                            child: SelectableText(
-                              '${entry.value}',
-                              style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 12,
-                              ),
+                            child: Builder(
+                              builder: (context) {
+                                final value = '${entry.value}';
+                                final preview = value.length > 12000
+                                    ? '[showing last 12000 characters]\n'
+                                        '${value.substring(value.length - 12000)}'
+                                    : value;
+                                return SelectableText(
+                                  preview,
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                  ),
+                                );
+                              },
                             ),
                           ),
                         ],

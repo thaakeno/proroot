@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-crash-capture-v9
+# rebuild marker: safe-diagnostics-crash-capture-v10
 
 on:
   push:

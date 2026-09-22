@@ -16,10 +16,21 @@ class RuntimeDiagnostics(
 ) {
     fun collect(status: RuntimeStatus): Map<String, Any?> {
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
+        val crashLog = File(paths.logsDir, "proroot-crash.log")
+        val recordedRuntimeCrash = crashLog
+            .takeIf(File::isFile)
+            ?.readText()
+            ?.let { log ->
+                log.contains("[proroot] SIGSEGV") ||
+                    log.contains("[proroot] SIGABRT") ||
+                    log.contains("[proroot] SIGBUS")
+            } == true
         val logs = paths.logsDir.listFiles()
             ?.filter(File::isFile)
             ?.sortedByDescending(File::lastModified)
-            ?.associate { it.name to it.readText() }
+            ?.associate { file ->
+                file.name to readTail(file, 120_000)
+            }
             ?: emptyMap()
         val prorootCrashDumps = paths.prorootCrashDumps
             .filter(File::isFile)
@@ -27,11 +38,11 @@ class RuntimeDiagnostics(
                 dump.name to mapOf(
                     "bytes" to dump.length(),
                     "lastModified" to dump.lastModified(),
-                    "content" to dump.readText().take(250_000),
+                    "content" to readTail(dump, 180_000),
                 )
             }
 
-        val probes = if (installed) {
+        val probes = if (installed && !recordedRuntimeCrash) {
             linkedMapOf(
                 "guestIdentity" to probe(
                     "id -u; id -un; printf 'HOME=%s\\n' \"\$HOME\"",
@@ -153,6 +164,14 @@ class RuntimeDiagnostics(
                     )
                 }
             }
+        } else if (installed && recordedRuntimeCrash) {
+            mapOf(
+                "safeMode" to mapOf(
+                    "ok" to true,
+                    "exitCode" to 0,
+                    "output" to "Live ProRoot probes skipped because the previous desktop session crashed. Persistent logs and crash maps are still included.",
+                ),
+            )
         } else {
             emptyMap()
         }
@@ -192,6 +211,13 @@ class RuntimeDiagnostics(
     }
 
     private fun Long?.orZero(): Long = this ?: 0L
+
+    private fun readTail(file: File, maxChars: Int): String {
+        val text = runCatching { file.readText() }
+            .getOrElse { error -> return "<could not read: ${error.message}>" }
+        if (text.length <= maxChars) return text
+        return "[truncated to last $maxChars characters]\n" + text.takeLast(maxChars)
+    }
 
     private fun probe(
         command: String,

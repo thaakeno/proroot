@@ -92,7 +92,14 @@ class RuntimeEngine private constructor(private val context: Context) {
                     phase = RuntimePhase.failed,
                     progress = 0.0,
                     message = "Previous Linux session crashed",
-                    detail = previousRuntimeCrash.takeLast(12_000),
+                    detail = previousRuntimeCrash
+                        .lineSequence()
+                        .lastOrNull { line ->
+                            line.contains("[proroot] SIGSEGV") ||
+                                line.contains("[proroot] SIGABRT") ||
+                                line.contains("[proroot] SIGBUS")
+                        }
+                        ?: previousRuntimeCrash.takeLast(2_000),
                     installed = true,
                     running = false,
                 )
