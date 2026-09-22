@@ -27,7 +27,7 @@ class RuntimeInstaller(
         private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
         private const val BASE_PROVISIONED_MARKER = ".proroot-base-provisioned"
         private const val GRAPHICS_INSTALLED_MARKER = ".proroot-graphics-installed"
-        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v6"
+        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v7"
         private const val LINK_TARGETS_FIXED_MARKER = ".proroot-link-targets-v1"
         private const val MIN_HEALTHY_DPKG_PACKAGES = 150
     }
@@ -414,10 +414,11 @@ class RuntimeInstaller(
                     plasma-desktop plasma-workspace plasma-desktoptheme libplasma6 \
                     qml6-module-org-kde-plasma-plasma5support qml6-module-org-kde-ksvg \
                     qmlscene-qt6 kscreen kde-config-screenlocker plasma-pa powerdevil \
+                    kinfocenter breeze-icon-theme plasma-desktop-data \
                     xkb-data x11-xkb-utils libxcb-cursor0
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \
-                    plasma-desktoptheme qml6-module-org-kde-ksvg \
-                    qml6-module-org-kde-plasma-plasma5support
+                    plasma-desktoptheme breeze-icon-theme plasma-desktop-data \
+                    qml6-module-org-kde-ksvg qml6-module-org-kde-plasma-plasma5support
                 dpkg --configure -a
             """.trimIndent(),
         )
@@ -427,6 +428,9 @@ class RuntimeInstaller(
             command = """
                 set -e
                 test -x /usr/bin/qmlscene6
+                test -x /usr/bin/kinfocenter
+                test -x /usr/bin/kbuildsycoca6
+                test -f /etc/xdg/menus/plasma-applications.menu
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/qmldir
                 test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/libcorebindingsplugin.so
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/qmldir
@@ -441,6 +445,10 @@ class RuntimeInstaller(
                     /home/linux/.cache/ksycoca6_* 2>/dev/null || true
                 chown -R linux:linux /home/linux/.cache 2>/dev/null || true
                 update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+                XDG_MENU_PREFIX=plasma- \
+                XDG_CONFIG_DIRS=/etc/xdg \
+                XDG_DATA_DIRS=/usr/local/share:/usr/share \
+                  kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
             """.trimIndent(),
         )
 
