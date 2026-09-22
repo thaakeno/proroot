@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-runtime-stability-menu-ui-v15
+# rebuild marker: proroot-v128-runtime-stability-menu-ui-v16
 
 on:
   push:
