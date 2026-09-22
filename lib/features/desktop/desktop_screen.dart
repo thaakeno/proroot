@@ -19,8 +19,30 @@ class _DesktopScreenState extends State<DesktopScreen> {
   bool _controlsVisible = true;
 
   Future<void> _toggleInputMode() async {
-    final next = widget.controller.inputMode == 'trackpad' ? 'direct' : 'trackpad';
+    final next =
+        widget.controller.inputMode == 'trackpad' ? 'direct' : 'trackpad';
     await widget.controller.setInputMode(next);
+  }
+
+  Future<void> _openDeviceInfo() async {
+    if (widget.controller.deviceInfoInLinux) {
+      try {
+        await widget.controller.openLinuxDeviceInfo();
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open Linux device info: $error')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DeviceInfoScreen(controller: widget.controller),
+      ),
+    );
   }
 
   void _showFailureDetails(RuntimeSnapshot snapshot) {
@@ -156,13 +178,10 @@ class _DesktopScreenState extends State<DesktopScreen> {
                 ),
               ),
               IconButton(
-                tooltip: 'Device info',
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        DeviceInfoScreen(controller: widget.controller),
-                  ),
-                ),
+                tooltip: widget.controller.deviceInfoInLinux
+                    ? 'Open KDE Info Center'
+                    : 'Device info',
+                onPressed: _openDeviceInfo,
                 color: Colors.white,
                 icon: const Icon(Icons.developer_board_rounded),
               ),
@@ -245,44 +264,284 @@ class _StartupOverlay extends StatelessWidget {
 
   final RuntimeSnapshot snapshot;
 
+  String _duration(int seconds) {
+    final minutes = seconds ~/ 60;
+    final remainder = seconds % 60;
+    if (minutes == 0) return '${remainder}s';
+    return '${minutes}m ${remainder.toString().padLeft(2, '0')}s';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final progress = snapshot.progress.clamp(0.0, 1.0);
-    return ColoredBox(
-      color: Theme.of(context).colorScheme.surface,
-      child: Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 420),
-          margin: const EdgeInsets.all(24),
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: Theme.of(context).colorScheme.outlineVariant,
+    final percent = (progress * 100).round();
+    final stages = snapshot.stageDetail
+            ?.split('\n')
+            .where((line) => line.trim().isNotEmpty)
+            .take(5)
+            .toList() ??
+        const <String>[];
+    final currentStep = snapshot.totalItems > 0
+        ? '${(snapshot.completedItems + 1).clamp(1, snapshot.totalItems)}/${snapshot.totalItems}'
+        : 'Boot';
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            scheme.surface,
+            Color.alphaBlend(
+              scheme.primary.withValues(alpha: 0.10),
+              scheme.surface,
+            ),
+            scheme.surfaceContainerLow,
+          ],
+        ),
+      ),
+      child: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 540),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.all(26),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHigh.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: scheme.outlineVariant),
+                boxShadow: [
+                  BoxShadow(
+                    blurRadius: 44,
+                    offset: const Offset(0, 18),
+                    color: Colors.black.withValues(alpha: 0.20),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 58,
+                        height: 58,
+                        decoration: BoxDecoration(
+                          color: scheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Icon(
+                          Icons.desktop_windows_rounded,
+                          color: scheme.onPrimaryContainer,
+                          size: 30,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Booting Linux desktop',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .headlineSmall
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'KDE Plasma · Anland · Wayland',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 26),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          snapshot.message,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        '$percent%',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              color: scheme.primary,
+                              fontWeight: FontWeight.w900,
+                            ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TweenAnimationBuilder<double>(
+                    duration: const Duration(milliseconds: 320),
+                    curve: Curves.easeOutCubic,
+                    tween: Tween<double>(begin: 0, end: progress),
+                    builder: (context, value, _) => LinearProgressIndicator(
+                      value: value > 0 ? value : null,
+                      minHeight: 10,
+                      borderRadius: BorderRadius.circular(99),
+                      backgroundColor: scheme.surfaceContainerHighest,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      _BootMetric(
+                        icon: Icons.timer_outlined,
+                        label: 'Elapsed',
+                        value: _duration(snapshot.elapsedSeconds),
+                      ),
+                      const SizedBox(width: 10),
+                      _BootMetric(
+                        icon: Icons.layers_outlined,
+                        label: 'Stage',
+                        value: currentStep,
+                      ),
+                      const SizedBox(width: 10),
+                      const _BootMetric(
+                        icon: Icons.monitor_heart_outlined,
+                        label: 'Display',
+                        value: 'Live',
+                      ),
+                    ],
+                  ),
+                  if (stages.isNotEmpty) ...[
+                    const SizedBox(height: 22),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Column(
+                        children: [
+                          for (var index = 0; index < stages.length; index++)
+                            _BootStage(
+                              text: stages[index],
+                              last: index == stages.length - 1,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Text(
+                    'The display transport stays mounted while Plasma finishes starting, so the desktop can appear without tearing down the Android surface.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          height: 1.35,
+                        ),
+                  ),
+                ],
+              ),
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Starting KDE Plasma',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-              ),
-              const SizedBox(height: 8),
-              Text(snapshot.message),
-              const SizedBox(height: 16),
-              LinearProgressIndicator(
-                value: progress > 0 ? progress : null,
-                minHeight: 7,
-                borderRadius: BorderRadius.circular(99),
-              ),
-            ],
-          ),
         ),
+      ),
+    );
+  }
+}
+
+class _BootMetric extends StatelessWidget {
+  const _BootMetric({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 18, color: scheme.primary),
+            const SizedBox(height: 7),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BootStage extends StatelessWidget {
+  const _BootStage({required this.text, required this.last});
+
+  final String text;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final trimmed = text.trim();
+    final active = trimmed.startsWith('›');
+    final cleaned =
+        trimmed.replaceFirst('✓', '').replaceFirst('›', '').trim();
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: last ? 0 : 10),
+      child: Row(
+        children: [
+          Icon(
+            active ? Icons.pending_rounded : Icons.check_circle_rounded,
+            size: 19,
+            color: active ? scheme.primary : scheme.tertiary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              cleaned,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    color:
+                        active ? scheme.onSurface : scheme.onSurfaceVariant,
+                  ),
+            ),
+          ),
+        ],
       ),
     );
   }
