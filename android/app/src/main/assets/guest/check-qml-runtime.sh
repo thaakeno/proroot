@@ -10,7 +10,7 @@ fi
 echo "qt_qml_root=$qml_root"
 echo "qtpaths6=$(command -v qtpaths6 || true)"
 echo "qmlscene6=$(command -v qmlscene6 || true)"
-dpkg-query -W -f='\${binary:Package}\t\${Version}\n' \
+dpkg-query -W -f='${binary:Package}\t${Version}\n' \
     plasma-desktoptheme qml6-module-org-kde-ksvg libplasma6 2>/dev/null || true
 
 test -x /usr/bin/qmlscene6
