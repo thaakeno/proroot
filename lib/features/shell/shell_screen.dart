@@ -52,6 +52,10 @@ class _ShellScreenState extends State<ShellScreen> {
         }
       },
       child: Scaffold(
+        // The Linux SurfaceView must not be resized by the Android IME. Resizing
+        // it caused Anland to tear down/reconnect repeatedly during keyboard
+        // animations, which is exactly the black-screen/crash loop seen in logs.
+        resizeToAvoidBottomInset: !_desktopSelected,
         body: SafeArea(
           top: true,
           bottom: false,
