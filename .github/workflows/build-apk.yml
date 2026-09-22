@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-safe-kde-startup-v14
+# rebuild marker: proroot-v128-runtime-stability-menu-ui-v15
 
 on:
   push:
