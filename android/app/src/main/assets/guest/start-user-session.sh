@@ -73,6 +73,7 @@ pipewire_pid=""
 wireplumber_pid=""
 pulse_pid=""
 session_pid=""
+launcher_pid=""
 
 cleanup_audio() {
     stop_pid "$pulse_pid"
@@ -82,6 +83,8 @@ cleanup_audio() {
 }
 
 cleanup_session() {
+    stop_pid "$launcher_pid"
+    rm -f "$runtime/proroot-app-launcher.sock"
     stop_pid "$session_pid"
     if [[ -n "$session_pid" ]]; then
         wait "$session_pid" >/dev/null 2>&1 || true
@@ -116,6 +119,11 @@ export PIPEWIRE_RUNTIME_DIR="$runtime"
 export PULSE_RUNTIME_PATH="$pulse_dir"
 export PULSE_SERVER="unix:$pulse_dir/native"
 
+# Prefer native Wayland for browser/Electron families globally. This is session
+# policy, not an Apps-tab per-application rewrite.
+export MOZ_ENABLE_WAYLAND=1
+export ELECTRON_OZONE_PLATFORM_HINT=wayland
+
 env XDG_CONFIG_HOME="$pipewire_config" pipewire >"$log_dir/pipewire.log" 2>&1 &
 pipewire_pid=$!
 if wait_for_socket "$runtime/pipewire-0"; then
@@ -145,7 +153,7 @@ persist_env() {
         GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
         ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
-        FD_FORCE_KGSL PROROOT_REFRESH_HZ
+        FD_FORCE_KGSL PROROOT_REFRESH_HZ         MOZ_ENABLE_WAYLAND ELECTRON_OZONE_PLATFORM_HINT
     do
         persist_env "$name"
     done
@@ -201,6 +209,21 @@ session_pid=$!
 if ! wait_for_plasma 300; then
     echo "KWin/Plasma shell did not become healthy" >&2
     exit 70
+fi
+
+# Launch Android-requested apps from this exact KDE session instead of spawning
+# a second ProRoot runtime. This keeps Wayland, DBus, audio and GPU environment
+# identical to launching the same icon from Plasma.
+wayland_socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit)"
+if [[ -n "$wayland_socket" ]]; then
+    export WAYLAND_DISPLAY="${wayland_socket##*/}"
+    /usr/local/lib/proroot/desktop-launcher-bridge.py         >"$log_dir/desktop-launcher.log" 2>&1 &
+    launcher_pid=$!
+    for _ in {1..40}; do
+        [[ -S "$runtime/proroot-app-launcher.sock" ]] && break
+        kill -0 "$launcher_pid" >/dev/null 2>&1 || break
+        sleep 0.05
+    done
 fi
 
 wait "$session_pid"
