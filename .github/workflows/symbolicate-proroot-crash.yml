@@ -36,6 +36,30 @@ jobs:
           curl -fL https://raw.githubusercontent.com/coderredlab/proroot/v1.2.8/arm64-v8a/libproroot-runtime.so -o /tmp/libproroot-runtime.so
           {
             echo "libc build_id=$build_id"
+            echo "=== libc signal symbols ==="
+            aarch64-linux-gnu-nm -anC "$debug" | grep -E ' (__pthread_kill_implementation|__pthread_kill|pthread_kill|raise|abort|gsignal)            for off in 0xd5020 0xd500c 0x6ea84 0x6f25c 0x6f33c; do
+              echo "--- $off ---"
+              aarch64-linux-gnu-addr2line -a -f -C -i -e "$debug" "$off"
+            done
+            echo
+            echo "=== ProRoot signal symbols ==="
+            aarch64-linux-gnu-nm -anC /tmp/libproroot-runtime.so | grep -E ' (kill|tkill|tgkill|signal|proroot_sigsegv_handler|proroot_sigsys_handler)$' || true
+            for sym in kill tkill tgkill signal proroot_sigsegv_handler; do
+              echo
+              echo "=== $sym ==="
+              aarch64-linux-gnu-objdump -dC --disassemble="$sym" /tmp/libproroot-runtime.so
+            done
+            echo
+            echo "=== trace strings ==="
+            strings -tx /tmp/libproroot-runtime.so | grep -E 'PROROOT_TRACE_KILL|PROROOT_TRACE_SIGSEGV_STACK|proroot-sigsegv-maps|SIGSEGV pc=' || true
+          } | tee symbolicate.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proroot-symbolication
+          path: symbolicate.txt
+ || true
+            echo
             echo "=== libc candidate offsets ==="
             for off in 0xd5020 0xd500c 0x6ea84 0x6f25c 0x6f33c; do
               echo "--- $off ---"
