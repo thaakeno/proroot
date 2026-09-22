@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-surfaceview-skia-host-texture-v9
+# rebuild marker: proroot-v128-transparent-anland-surface-v10
 
 on:
   push:
