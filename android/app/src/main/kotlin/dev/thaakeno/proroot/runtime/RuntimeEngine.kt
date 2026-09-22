@@ -3,7 +3,6 @@ package dev.thaakeno.proroot.runtime
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
-import dev.thaakeno.proroot.display.LinuxDisplayRegistry
 import dev.thaakeno.proroot.install.RuntimeInstaller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -198,11 +197,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                     return@withLock
                 }
 
-                val consumerStopped = stopDisplayConsumerBeforeRuntime()
                 session.stop()
                 systemServices.stop()
+                daemon.stop()
                 publishStartFailure(failure)
-                stopDisplayTransportAfterConsumerStop(consumerStopped)
                 stopForegroundHost()
             }
         }
@@ -229,7 +227,16 @@ class RuntimeEngine private constructor(private val context: Context) {
                 scope.launch {
                     mutex.withLock {
                         if (RuntimeEvents.latest.phase != RuntimePhase.running) return@withLock
-                        val consumerStopped = stopDisplayConsumerBeforeRuntime()
+                        RuntimeEvents.publish(
+                            RuntimeStatus(
+                                phase = RuntimePhase.stopping,
+                                message = "Desktop process exited · cleaning up",
+                                installed = true,
+                                running = true,
+                            ),
+                        )
+                        systemServices.stop()
+                        daemon.stop()
                         RuntimeEvents.publish(
                             RuntimeStatus(
                                 phase = RuntimePhase.failed,
@@ -239,8 +246,6 @@ class RuntimeEngine private constructor(private val context: Context) {
                                 running = false,
                             ),
                         )
-                        systemServices.stop()
-                        stopDisplayTransportAfterConsumerStop(consumerStopped)
                         stopForegroundHost()
                     }
                 }
@@ -340,27 +345,36 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun stop() {
         scope.launch {
             mutex.withLock {
-                // Remove the Flutter platform view first. Its normal Android
-                // dispose/surfaceDestroyed path owns nativeStop(), matching
-                // upstream Anland. Only fall back to an explicit stop if Flutter
-                // fails to detach the view in time.
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = RuntimePhase.stopping,
                         message = "Stopping Linux",
                         installed = paths.installMarker.isFile,
-                        running = false,
+                        running = true,
                     ),
                 )
-                val consumerStopped = detachDisplayConsumerForRuntimeStop()
+
+                // Keep the Android SurfaceView mounted while Linux closes. KWin
+                // and the daemon release the producer/transport first; only the
+                // final ready status lets Flutter dispose the native view.
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransportAfterConsumerStop(consumerStopped)
+                daemon.stop()
+
                 RuntimeEvents.publish(
                     RuntimeStatus(
-                        phase = if (paths.installMarker.isFile) RuntimePhase.ready else RuntimePhase.missing,
-                        message = if (paths.installMarker.isFile) "Ready" else "Linux environment is not installed",
+                        phase = if (paths.installMarker.isFile) {
+                            RuntimePhase.ready
+                        } else {
+                            RuntimePhase.missing
+                        },
+                        message = if (paths.installMarker.isFile) {
+                            "Ready"
+                        } else {
+                            "Linux environment is not installed"
+                        },
                         installed = paths.installMarker.isFile,
+                        running = false,
                     ),
                 )
                 stopForegroundHost()
@@ -376,13 +390,12 @@ class RuntimeEngine private constructor(private val context: Context) {
                         phase = RuntimePhase.stopping,
                         message = "Resetting Linux",
                         installed = paths.installMarker.isFile,
-                        running = false,
+                        running = true,
                     ),
                 )
-                val consumerStopped = detachDisplayConsumerForRuntimeStop()
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransportAfterConsumerStop(consumerStopped)
+                daemon.stop()
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()
                 paths.rootfsPrevious.deleteRecursively()
@@ -432,36 +445,6 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     fun deviceInfo(): Map<String, Any?> =
         deviceInfoCollector.collect()
-
-    private fun detachDisplayConsumerForRuntimeStop(): Boolean {
-        if (LinuxDisplayRegistry.awaitDetached(timeoutMs = 5_000)) return true
-
-        File(paths.logsDir, "anland-daemon.log").appendText(
-            "display view did not detach within 5s; falling back to explicit consumer stop\n",
-        )
-        return stopDisplayConsumerBeforeRuntime()
-    }
-
-    private fun stopDisplayConsumerBeforeRuntime(): Boolean {
-        val stopped = LinuxDisplayRegistry.stopConsumerAndAwait()
-        if (!stopped) {
-            File(paths.logsDir, "anland-daemon.log").appendText(
-                "display consumer did not stop within 5s; deferring daemon teardown to avoid JNI race\n",
-            )
-        }
-        return stopped
-    }
-
-    private fun stopDisplayTransportAfterConsumerStop(consumerStopped: Boolean) {
-        val detached = LinuxDisplayRegistry.awaitDetached(timeoutMs = 2_500)
-        if (consumerStopped || detached) {
-            daemon.stop()
-        } else {
-            File(paths.logsDir, "anland-daemon.log").appendText(
-                "display consumer is still attached after runtime stop; keeping daemon alive to avoid JNI teardown race\n",
-            )
-        }
-    }
 
     private fun startForegroundHost() {
         ContextCompat.startForegroundService(
