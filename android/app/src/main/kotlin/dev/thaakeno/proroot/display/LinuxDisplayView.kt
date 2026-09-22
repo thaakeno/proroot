@@ -13,7 +13,7 @@ class LinuxDisplayView(
     override fun getView(): View = surface
 
     override fun dispose() {
-        LinuxDisplayRegistry.detach(surface)
         surface.dispose()
+        LinuxDisplayRegistry.detach(surface)
     }
 }
