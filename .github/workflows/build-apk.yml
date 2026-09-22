@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: safe-diagnostics-crash-capture-v10
+# rebuild marker: proroot-v128-forensics-about-v11
 
 on:
   push:
@@ -54,7 +54,16 @@ jobs:
         run: flutter pub get
 
       - name: Build ARM64 debug APK
-        run: flutter build apk --debug --target-platform android-arm64 --build-number "$GITHUB_RUN_NUMBER"
+        run: |
+          APP_VERSION="$(awk '/^version:/ { split($2, value, "+"); print value[1]; exit }' pubspec.yaml)"
+          flutter build apk \
+            --debug \
+            --target-platform android-arm64 \
+            --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define="APP_VERSION=$APP_VERSION" \
+            --dart-define="APP_BUILD=$GITHUB_RUN_NUMBER" \
+            --dart-define="GIT_SHA=$GITHUB_SHA" \
+            --dart-define="PROROOT_VERSION=v1.2.8"
 
       - name: Prepare artifact
         run: |
