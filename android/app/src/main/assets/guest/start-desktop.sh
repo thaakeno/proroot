@@ -41,8 +41,10 @@ if [[ -n "$qml_root" && -d "$qml_root" ]]; then
     export QML_IMPORT_PATH="$qml_root"
     export QML2_IMPORT_PATH="$qml_root"
 fi
-export QML_IMPORT_TRACE=1
-export QT_DEBUG_PLUGINS=1
+# Keep normal sessions quiet. Set PROROOT_QML_DEBUG=1 explicitly when a full
+# Qt import/plugin trace is needed; the trace is very large and adds startup load.
+export QML_IMPORT_TRACE="${PROROOT_QML_DEBUG:-0}"
+export QT_DEBUG_PLUGINS="${PROROOT_QML_DEBUG:-0}"
 
 export GDK_BACKEND=wayland
 export SDL_VIDEODRIVER=wayland
