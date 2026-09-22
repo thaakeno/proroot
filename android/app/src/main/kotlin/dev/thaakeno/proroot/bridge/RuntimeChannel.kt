@@ -107,9 +107,15 @@ class RuntimeChannel(
                 if (desktopId.isNullOrBlank()) {
                     result.error("invalid_desktop_id", "Desktop id is empty", null)
                 } else {
-                    runCatching { engine.launchDesktopApp(desktopId) }
-                        .onSuccess { result.success(null) }
-                        .onFailure { result.error("launch_failed", it.message, null) }
+                    scope.launch {
+                        runCatching { engine.launchDesktopApp(desktopId) }
+                            .onSuccess { main.post { result.success(null) } }
+                            .onFailure { error ->
+                                main.post {
+                                    result.error("launch_failed", error.message, null)
+                                }
+                            }
+                    }
                 }
             }
             "showKeyboard" -> result.success(LinuxDisplayRegistry.showKeyboard())
