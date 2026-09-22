@@ -3,7 +3,7 @@ class BuildInfo {
 
   static const version = String.fromEnvironment(
     'APP_VERSION',
-    defaultValue: '0.1.0',
+    defaultValue: '0.2.0-dev.1',
   );
   static const build = String.fromEnvironment(
     'APP_BUILD',
