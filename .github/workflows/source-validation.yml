@@ -107,7 +107,7 @@ jobs:
           grep -q 'XDG_MENU_PREFIX=plasma-' android/app/src/main/assets/guest/start-desktop.sh
           grep -q 'kbuildsycoca6 --noincremental' android/app/src/main/assets/guest/start-user-session.sh
           grep -q 'kinfocenter' android/app/src/main/kotlin/dev/thaakeno/proroot/install/RuntimeInstaller.kt
-          grep -q 'Audio is process-global' android/app/src/main/cpp/anland-lifecycle.patch
+          grep -q 'Audio is process-global' android/app/src/main/cpp/patch-anland-lifecycle.cmake
           if grep -q 'scheduleSurfaceRestart' android/app/src/main/kotlin/dev/thaakeno/proroot/display/LinuxSurfaceView.kt; then
             echo 'Destructive SurfaceView resize restart returned' >&2
             exit 1
