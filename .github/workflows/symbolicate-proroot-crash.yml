@@ -16,12 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install AArch64 binutils
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y binutils-aarch64-linux-gnu
 
-      - name: Download exact Debian 13 glibc and debug symbols
+      - name: Analyze exact binaries
         run: |
           set -euxo pipefail
           base=https://ftp.debian.org/debian/pool/main/g/glibc
@@ -30,57 +30,29 @@ jobs:
           mkdir -p /tmp/libc /tmp/dbg
           dpkg-deb -x /tmp/libc6.deb /tmp/libc
           dpkg-deb -x /tmp/libc6-dbg.deb /tmp/dbg
-
-      - name: Symbolicate device crash
-        run: |
-          set -euxo pipefail
           libc=/tmp/libc/usr/lib/aarch64-linux-gnu/libc.so.6
-          test -f "$libc"
           build_id="$(aarch64-linux-gnu-readelf -n "$libc" | awk '/Build ID:/ {print $3; exit}')"
           debug="/tmp/dbg/usr/lib/debug/.build-id/${build_id:0:2}/${build_id:2}.debug"
-          test -f "$debug"
-
+          curl -fL https://raw.githubusercontent.com/coderredlab/proroot/v1.2.8/arm64-v8a/libproroot-runtime.so -o /tmp/libproroot-runtime.so
           {
-            echo "libc=$libc"
-            echo "build_id=$build_id"
-            echo "debug=$debug"
-            echo
-            echo "=== ELF / load segments ==="
-            aarch64-linux-gnu-readelf -lW "$libc" | grep -E 'LOAD|Entry'
-            echo
-            echo "=== Address candidates assuming libc base 0x70c9000000 ==="
+            echo "libc build_id=$build_id"
+            echo "=== libc candidate offsets ==="
             for off in 0xd5020 0xd500c 0x6ea84 0x6f25c 0x6f33c; do
               echo "--- $off ---"
               aarch64-linux-gnu-addr2line -a -f -C -i -e "$debug" "$off"
             done
             echo
-            echo "=== Dynamic symbols around 0xd5020 ==="
-            aarch64-linux-gnu-nm -anC "$debug" | awk '$1 ~ /^[0-9a-fA-F]+$/ {v=strtonum("0x"$1); if (v >= 0xd3000 && v <= 0xd7000) print}' || true
-            echo
-            echo "=== Disassembly around 0xd5020 ==="
-            aarch64-linux-gnu-objdump -dC --start-address=0xd4f80 --stop-address=0xd5080 "$libc"
-          } | tee symbolicate.txt
-
-      - name: Disassemble ProRoot v1.2.8 signal path
-        run: |
-          set -euxo pipefail
-          curl -fL https://raw.githubusercontent.com/coderredlab/proroot/v1.2.8/arm64-v8a/libproroot-runtime.so -o /tmp/libproroot-runtime.so
-          {
-            echo
-            echo "=== ProRoot signal / kill symbols ==="
-            aarch64-linux-gnu-nm -anC /tmp/libproroot-runtime.so | grep -E ' (raise|kill|tkill|tgkill|signal|proroot_sigsegv_handler|proroot_sigsys_handler|proroot_load_user_sigsys|proroot_record_user_sigsys)        with:
-          name: proroot-symbolication
-          path: symbolicate.txt
- || true
+            echo "=== ProRoot signal symbols ==="
+            aarch64-linux-gnu-nm -anC /tmp/libproroot-runtime.so | grep -E ' (kill|tkill|tgkill|signal|proroot_sigsegv_handler|proroot_sigsys_handler)$' || true
             for sym in kill tkill tgkill signal proroot_sigsegv_handler; do
               echo
               echo "=== $sym ==="
               aarch64-linux-gnu-objdump -dC --disassemble="$sym" /tmp/libproroot-runtime.so
             done
             echo
-            echo "=== strings: trace controls ==="
+            echo "=== trace strings ==="
             strings -tx /tmp/libproroot-runtime.so | grep -E 'PROROOT_TRACE_KILL|PROROOT_TRACE_SIGSEGV_STACK|proroot-sigsegv-maps|SIGSEGV pc=' || true
-          } | tee -a symbolicate.txt
+          } | tee symbolicate.txt
 
       - uses: actions/upload-artifact@v4
         with:
