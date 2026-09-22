@@ -51,6 +51,12 @@ class RuntimeBridge {
         false;
   }
 
+  Future<Map<String, dynamic>> deviceInfo() async {
+    final raw =
+        await _method.invokeMapMethod<dynamic, dynamic>('deviceInfo') ?? const {};
+    return raw.map((key, value) => MapEntry('$key', value));
+  }
+
   Future<Map<String, dynamic>> diagnostics() async {
     final raw = await _method.invokeMapMethod<dynamic, dynamic>('diagnostics') ?? const {};
     return raw.map((key, value) => MapEntry('$key', value));
