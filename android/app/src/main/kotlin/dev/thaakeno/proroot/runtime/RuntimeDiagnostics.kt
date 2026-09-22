@@ -1,8 +1,12 @@
 package dev.thaakeno.proroot.runtime
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Context
+import dev.thaakeno.proroot.BuildConfig
 import dev.thaakeno.proroot.install.RuntimeInstaller
 import java.io.File
+import java.security.MessageDigest
 
 class RuntimeDiagnostics(
     private val context: Context,
@@ -25,6 +29,8 @@ class RuntimeDiagnostics(
                     log.contains("[proroot] SIGABRT") ||
                     log.contains("[proroot] SIGBUS")
             } == true
+        val safeDiagnostics = installed &&
+            (recordedRuntimeCrash || status.phase == RuntimePhase.failed)
         val logs = paths.logsDir.listFiles()
             ?.filter(File::isFile)
             ?.sortedByDescending(File::lastModified)
@@ -33,16 +39,24 @@ class RuntimeDiagnostics(
             }
             ?: emptyMap()
         val prorootCrashDumps = paths.prorootCrashDumps
-            .filter(File::isFile)
+            .filter { it.isFile && it.length() > 0L }
+            .distinctBy(File::absolutePath)
             .associate { dump ->
-                dump.name to mapOf(
+                "${dump.parentFile?.name}/${dump.name}" to mapOf(
+                    "path" to dump.absolutePath,
                     "bytes" to dump.length(),
                     "lastModified" to dump.lastModified(),
                     "content" to readTail(dump, 180_000),
                 )
             }
+        val sessionEnvironment = File(paths.rootfs, "run/user")
+            .listFiles()
+            ?.asSequence()
+            ?.map { File(it, "proroot-session.env") }
+            ?.firstOrNull(File::isFile)
+            ?.let { readTail(it, 20_000) }
 
-        val probes = if (installed && !recordedRuntimeCrash) {
+        val probes = if (installed && !safeDiagnostics) {
             linkedMapOf(
                 "guestIdentity" to probe(
                     "id -u; id -un; printf 'HOME=%s\\n' \"\$HOME\"",
@@ -122,9 +136,9 @@ class RuntimeDiagnostics(
                     timeoutSeconds = 8,
                 ),
                 "plasmaQmlRuntime" to probe(
-                    "/usr/local/lib/proroot/check-qml-runtime.sh",
+                    "/usr/local/lib/proroot/check-qml-runtime.sh --files-only",
                     fakeRoot = false,
-                    timeoutSeconds = 15,
+                    timeoutSeconds = 10,
                 ),
                 "desktopApplications" to probe(
                     """
@@ -164,12 +178,12 @@ class RuntimeDiagnostics(
                     )
                 }
             }
-        } else if (installed && recordedRuntimeCrash) {
+        } else if (safeDiagnostics) {
             mapOf(
                 "safeMode" to mapOf(
                     "ok" to true,
                     "exitCode" to 0,
-                    "output" to "Live ProRoot probes skipped because the previous desktop session crashed. Persistent logs and crash maps are still included.",
+                    "output" to "Live ProRoot probes skipped after a failed desktop start. Persistent logs, crash maps, Android exit history and binary hashes are still included.",
                 ),
             )
         } else {
@@ -178,6 +192,15 @@ class RuntimeDiagnostics(
 
         return linkedMapOf(
             "status" to status.asMap(),
+            "build" to mapOf(
+                "versionName" to BuildConfig.VERSION_NAME,
+                "versionCode" to BuildConfig.VERSION_CODE,
+                "gitSha" to BuildConfig.GIT_SHA,
+                "prorootVersion" to BuildConfig.PROROOT_VERSION,
+            ),
+            "prorootLibraries" to prorootLibraries(),
+            "androidProcessExitHistory" to androidExitHistory(),
+            "sessionEnvironment" to sessionEnvironment,
             "nativeLibraryDir" to context.applicationInfo.nativeLibraryDir,
             "rootfs" to paths.rootfs.absolutePath,
             "containerRuntime" to runner.runtimeId,
@@ -211,6 +234,63 @@ class RuntimeDiagnostics(
     }
 
     private fun Long?.orZero(): Long = this ?: 0L
+
+    private fun prorootLibraries(): Map<String, Any?> {
+        val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+        return nativeDir.listFiles()
+            ?.filter { it.isFile && it.name.startsWith("libproroot") && it.name.endsWith(".so") }
+            ?.sortedBy(File::name)
+            ?.associate { library ->
+                library.name to mapOf(
+                    "bytes" to library.length(),
+                    "sha256" to sha256(library),
+                )
+            }
+            ?: emptyMap()
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun androidExitHistory(): List<Map<String, Any?>> {
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        return runCatching {
+            manager.getHistoricalProcessExitReasons(context.packageName, 0, 6).map { info ->
+                mapOf(
+                    "timestamp" to info.timestamp,
+                    "reason" to exitReason(info.reason),
+                    "reasonCode" to info.reason,
+                    "status" to info.status,
+                    "importance" to info.importance,
+                    "description" to info.description,
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun exitReason(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_CRASH -> "CRASH"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+        ApplicationExitInfo.REASON_ANR -> "ANR"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
+        ApplicationExitInfo.REASON_SIGNALED -> "SIGNALED"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "EXCESSIVE_RESOURCE_USAGE"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "INITIALIZATION_FAILURE"
+        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "PERMISSION_CHANGE"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "USER_REQUESTED"
+        ApplicationExitInfo.REASON_USER_STOPPED -> "USER_STOPPED"
+        else -> "OTHER"
+    }
 
     private fun readTail(file: File, maxChars: Int): String {
         val text = runCatching { file.readText() }
