@@ -29,8 +29,9 @@ class RuntimeDiagnostics(
                     log.contains("[proroot] SIGABRT") ||
                     log.contains("[proroot] SIGBUS")
             } == true
+        val liveDesktop = session.isRunning() || status.running
         val safeDiagnostics = installed &&
-            (recordedRuntimeCrash || status.phase == RuntimePhase.failed)
+            (liveDesktop || recordedRuntimeCrash || status.phase == RuntimePhase.failed)
         val logs = paths.logsDir.listFiles()
             ?.filter { it.isFile }
             ?.sortedByDescending { it.lastModified() }
@@ -183,7 +184,11 @@ class RuntimeDiagnostics(
                 "safeMode" to mapOf(
                     "ok" to true,
                     "exitCode" to 0,
-                    "output" to "Live ProRoot probes skipped after a failed desktop start. Persistent logs, crash maps, Android exit history and binary hashes are still included.",
+                    "output" to if (liveDesktop) {
+                        "Live guest probes skipped while KDE is running. Diagnostics are read-only so the active ProRoot/Anland session is not disturbed."
+                    } else {
+                        "Live guest probes skipped after a failed desktop start. Persistent logs, crash maps, Android exit history and binary hashes are still included."
+                    },
                 ),
             )
         } else {
