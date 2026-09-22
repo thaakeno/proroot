@@ -13,9 +13,12 @@ export PATH=/usr/local/lib/proroot:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr
 export LANG=C.utf8
 export LC_ALL=C.utf8
 export XDG_CONFIG_HOME=/home/linux/.config
+export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_CACHE_HOME=/home/linux/.cache
 export XDG_DATA_HOME=/home/linux/.local/share
+export XDG_DATA_DIRS=/usr/local/share:/usr/share
 export XDG_STATE_HOME=/home/linux/.local/state
+export XDG_MENU_PREFIX=plasma-
 
 # Never inherit Android/launcher graphics state. The session owns this environment.
 unset DISPLAY PULSE_SERVER PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH
