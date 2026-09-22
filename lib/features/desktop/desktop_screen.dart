@@ -67,10 +67,6 @@ class _DesktopScreenState extends State<DesktopScreen> {
               onStart: widget.controller.start,
             ),
           ),
-        if (snapshot.phase == RuntimePhase.starting)
-          Positioned.fill(
-            child: _StartupOverlay(snapshot: snapshot),
-          ),
         if (snapshot.phase == RuntimePhase.stopping)
           const Positioned.fill(
             child: _RuntimeOverlay(
