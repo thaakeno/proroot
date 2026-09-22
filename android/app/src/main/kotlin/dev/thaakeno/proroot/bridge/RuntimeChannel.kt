@@ -124,6 +124,19 @@ class RuntimeChannel(
                     call.argument<Boolean>("enabled") == true,
                 ),
             )
+            "deviceInfo" -> scope.launch {
+                runCatching { engine.deviceInfo() }
+                    .onSuccess { info -> main.post { result.success(info) } }
+                    .onFailure { error ->
+                        main.post {
+                            result.error(
+                                "device_info_failed",
+                                error.message,
+                                error.stackTraceToString().takeLast(4_000),
+                            )
+                        }
+                    }
+            }
             "diagnostics" -> scope.launch {
                 runCatching { engine.diagnostics() }
                     .onSuccess { diagnostics ->
