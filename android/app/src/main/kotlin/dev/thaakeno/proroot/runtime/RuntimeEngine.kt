@@ -73,6 +73,8 @@ class RuntimeEngine private constructor(private val context: Context) {
             installer.recoverInterruptedActivation()
         }.exceptionOrNull()
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
+        if (installed) paths.cleanupStaleInstallStateIfVerified()
+
         val lastInstallFailure = installer.lastFailure()
         val interruptedInstall = installer.wasInterrupted()
         val previousRuntimeCrash = File(paths.logsDir, "proroot-crash.log")

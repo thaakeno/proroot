@@ -19,7 +19,6 @@ import com.anland.termux.Native
 import dev.thaakeno.proroot.runtime.RuntimePaths
 import java.io.File
 import kotlin.math.abs
-import kotlin.math.hypot
 
 class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
     private val paths = RuntimePaths(context)
@@ -28,35 +27,64 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var pendingSurfaceRestart: Runnable? = null
-    private var pendingPointerWake: Runnable? = null
     private var consumerStarted = false
     private var runtimeStopping = false
-    private var surfaceWidth = 0
-    private var surfaceHeight = 0
+    private var consumerWidth = 0
+    private var consumerHeight = 0
     private var surfaceFormat = 0
+    private var layoutWidth = 0
+    private var layoutHeight = 0
     private var options = DisplaySettings.current
+
     private var pointerX = 0f
     private var pointerY = 0f
-    private var downX = 0f
-    private var downY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
-    private var secondLastY = 0f
-    private var downTime = 0L
-    private var moved = false
+    private var pointerPrimed = false
     private var lastButtons = 0
 
+    private val touchpad = AnlandTouchpadController(
+        context,
+        object : AnlandTouchpadController.Output {
+            override fun movePointer(dx: Float, dy: Float) {
+                moveRelativePointer(dx, dy)
+            }
+
+            override fun sendButton(button: Int, pressed: Boolean) {
+                if (!consumerStarted) return
+                primePointerForTrackpad()
+                Native.nativeSendMouseButton(button, pressed)
+            }
+
+            override fun sendScroll(axis: Int, value: Float) {
+                if (!consumerStarted) return
+                primePointerForTrackpad()
+                Native.nativeSendMouseScroll(axis, value)
+            }
+        },
+    )
+
     private val optionsListener: (DisplayOptions) -> Unit = { next ->
+        val previousMode = options.inputMode
         options = next
+
         if (consumerStarted) {
             Native.nativeSetRefreshRate(next.refreshRate.toFloat())
             applyFrameRate(holder.surface, next.refreshRate)
+        }
+
+        if (previousMode != next.inputMode) {
+            touchpad.cancel()
+            syncButtons(0)
+            pointerPrimed = false
+            if (next.inputMode == InputMode.DIRECT) {
+                runCatching { releasePointerCapture() }
+            }
         }
     }
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
+        keepScreenOn = true
         holder.addCallback(this)
         DisplaySettings.addListener(optionsListener)
     }
@@ -65,53 +93,57 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         requestFocus()
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+    override fun surfaceChanged(
+        holder: SurfaceHolder,
+        format: Int,
+        width: Int,
+        height: Int,
+    ) {
         if (runtimeStopping || width <= 0 || height <= 0) return
-
-        if (consumerStarted &&
-            width == surfaceWidth &&
-            height == surfaceHeight &&
-            format == surfaceFormat
-        ) {
-            cancelPendingSurfaceRestart()
-            applyFrameRate(holder.surface, options.refreshRate)
-            return
-        }
+        surfaceFormat = format
 
         if (!consumerStarted) {
-            surfaceWidth = width
-            surfaceHeight = height
-            surfaceFormat = format
+            consumerWidth = width
+            consumerHeight = height
             startConsumerSafely(holder.surface, width, height)
             return
         }
 
-        // Flutter/IME animations can emit dozens of intermediate Surface sizes in
-        // a few seconds. Restarting Anland for every frame repeatedly tears down
-        // native render threads and was the last Android-process crash path seen
-        // in the device log. Keep rendering at the previous size and reconnect
-        // once the layout has been stable briefly.
-        scheduleSurfaceRestart(format, width, height)
+        // SurfaceView/Flutter can report transient height changes while the IME or
+        // system bars animate. The native consumer does not need to be torn down
+        // for those. Repeated nativeStop/nativeStart cycles were the dominant
+        // black-screen and Android-process crash path in device logs.
+        applyFrameRate(holder.surface, options.refreshRate)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        layoutWidth = w
+        layoutHeight = h
+
+        if (runtimeStopping || !consumerStarted || w <= 0 || h <= 0) return
+
+        // Keyboard/nav-bar changes are height-only in portrait. Keep Anland's
+        // transport alive. A width change is an actual orientation/window-size
+        // change, so reconnect once after the layout has settled.
+        if (oldw > 0 && abs(w - consumerWidth) >= 8) {
+            scheduleSurfaceRestart(surfaceFormat, w, h)
+        }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         cancelPendingSurfaceRestart()
-        cancelPointerWake()
+        releaseInputState()
         stopConsumerForRuntime()
-        surfaceWidth = 0
-        surfaceHeight = 0
+        consumerWidth = 0
+        consumerHeight = 0
         surfaceFormat = 0
     }
 
     fun prepareForRuntimeStop() {
         runtimeStopping = true
         cancelPendingSurfaceRestart()
-        cancelPointerWake()
-        runCatching { releasePointerCapture() }
-
-        if (consumerStarted && lastButtons != 0) {
-            syncButtons(0)
-        }
+        releaseInputState()
         stopConsumerForRuntime()
     }
 
@@ -120,42 +152,54 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         val error = runCatching {
             Native.nativeStop()
         }.exceptionOrNull()
+
         if (error == null) {
             consumerStarted = false
-            return
+            pointerPrimed = false
+        } else {
+            logConsumerError("nativeStop failed", error)
         }
-
-        logConsumerError("nativeStop failed", error)
     }
 
     fun dispose() {
         runtimeStopping = true
         cancelPendingSurfaceRestart()
-        cancelPointerWake()
+        releaseInputState()
         stopConsumerForRuntime()
         callbackBridge.dispose()
         DisplaySettings.removeListener(optionsListener)
         holder.removeCallback(this)
     }
 
+    private fun releaseInputState() {
+        touchpad.cancel()
+        if (consumerStarted && lastButtons != 0) syncButtons(0)
+        runCatching { releasePointerCapture() }
+    }
+
     private fun scheduleSurfaceRestart(format: Int, width: Int, height: Int) {
         cancelPendingSurfaceRestart()
         val restart = Runnable {
             pendingSurfaceRestart = null
-            if (runtimeStopping) return@Runnable
+            if (runtimeStopping || width <= 0 || height <= 0) return@Runnable
+
             val surface = holder.surface
             if (!surface.isValid) return@Runnable
 
+            releaseInputState()
             stopConsumerForRuntime()
             if (consumerStarted) return@Runnable
 
-            surfaceWidth = width
-            surfaceHeight = height
             surfaceFormat = format
+            consumerWidth = width
+            consumerHeight = height
             startConsumerSafely(surface, width, height)
         }
         pendingSurfaceRestart = restart
-        mainHandler.postDelayed(restart, 220L)
+
+        // Long enough to ride out Android rotation/inset animations, short enough
+        // that a real orientation change still feels immediate.
+        mainHandler.postDelayed(restart, 650L)
     }
 
     private fun cancelPendingSurfaceRestart() {
@@ -177,6 +221,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     private fun startConsumer(surface: Surface, width: Int, height: Int) {
         check(!runtimeStopping) { "Display consumer is stopping" }
         paths.ensureHostDirectories()
+
         Native.nativeConfigure(paths.anlandSocket.absolutePath, false, "", "")
         Native.nativeSetCompatibleMode(false)
         Native.nativeSetCustomResolution(width, height)
@@ -186,36 +231,14 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         Native.nativeSetMicEnabled(false)
         applyFrameRate(surface, options.refreshRate)
         Native.nativeStart(surface, callbackBridge)
-        consumerStarted = true
 
+        consumerStarted = true
+        consumerWidth = width
+        consumerHeight = height
         pointerX = width / 2f
         pointerY = height / 2f
-        Native.nativeSendMouseMotion(pointerX, pointerY, 0f, 0f)
-        schedulePointerWake()
-    }
-
-    private fun schedulePointerWake() {
-        cancelPointerWake()
-        val wake = Runnable {
-            pendingPointerWake = null
-            if (!consumerStarted) return@Runnable
-
-            // The first pointer packet can be sent before the Linux producer has
-            // connected. Send one harmless motion after the normal KWin connect
-            // window so the compositor switches from touch-only to cursor input.
-            runCatching {
-                Native.nativeSendMouseMotion(pointerX, pointerY, 0.5f, 0f)
-            }.onFailure { error ->
-                logConsumerError("pointer wake failed", error)
-            }
-        }
-        pendingPointerWake = wake
-        mainHandler.postDelayed(wake, 3_500L)
-    }
-
-    private fun cancelPointerWake() {
-        pendingPointerWake?.let(mainHandler::removeCallbacks)
-        pendingPointerWake = null
+        pointerPrimed = false
+        lastButtons = 0
     }
 
     private fun logConsumerError(prefix: String, error: Throwable) {
@@ -241,8 +264,10 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        outAttrs.inputType =
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        outAttrs.imeOptions =
+            EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
         return LinuxInputConnection(this, true)
     }
 
@@ -253,13 +278,23 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     fun setPointerCaptureEnabled(enabled: Boolean) {
         requestFocus()
-        if (enabled) requestPointerCapture() else releasePointerCapture()
+        if (enabled && options.inputMode == InputMode.TRACKPAD) {
+            requestPointerCapture()
+        } else {
+            releasePointerCapture()
+        }
     }
 
-    override fun onCapturedPointerEvent(event: MotionEvent): Boolean = handleMouse(event)
+    override fun onCapturedPointerEvent(event: MotionEvent): Boolean =
+        handleMouse(event)
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        sendHardwareKey(event, 0) || super.onKeyDown(keyCode, event)
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE && hasPointerCapture()) {
+            releasePointerCapture()
+            return true
+        }
+        return sendHardwareKey(event, 0) || super.onKeyDown(keyCode, event)
+    }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
         sendHardwareKey(event, 1) || super.onKeyUp(keyCode, event)
@@ -271,12 +306,14 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         ) {
             return false
         }
+
         val evdev = if (event.scanCode > 0) {
             event.scanCode
         } else {
             KeyCodeMapper.getScanCode(event.keyCode)
         }
         if (evdev < 0) return false
+
         Native.nativeSendKey(action, evdev)
         return true
     }
@@ -284,10 +321,17 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (runtimeStopping || !consumerStarted) return true
         requestFocus()
-        if (event.isFromSource(InputDevice.SOURCE_MOUSE)) return handleMouse(event)
+
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            return handleMouse(event)
+        }
+
         return when (options.inputMode) {
             InputMode.DIRECT -> handleDirectTouch(event)
-            InputMode.TRACKPAD -> handleTrackpad(event)
+            InputMode.TRACKPAD -> {
+                primePointerForTrackpad()
+                touchpad.onTouch(event)
+            }
         }
     }
 
@@ -304,13 +348,22 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     private fun handleDirectTouch(event: MotionEvent): Boolean {
         val action = event.actionMasked
         val index = event.actionIndex
+        val targetWidth = consumerWidth.takeIf { it > 0 } ?: width
+        val targetHeight = consumerHeight.takeIf { it > 0 } ?: height
+        val scaleX = if (width > 0) targetWidth.toFloat() / width else 1f
+        val scaleY = if (height > 0) targetHeight.toFloat() / height else 1f
+
+        fun x(i: Int) = (event.getX(i) * scaleX).coerceIn(0f, targetWidth.toFloat())
+        fun y(i: Int) = (event.getY(i) * scaleY).coerceIn(0f, targetHeight.toFloat())
+
         when (action) {
             MotionEvent.ACTION_DOWN,
-            MotionEvent.ACTION_POINTER_DOWN -> {
+            MotionEvent.ACTION_POINTER_DOWN,
+            -> {
                 Native.nativeSendTouch(
                     0,
-                    event.getX(index),
-                    event.getY(index),
+                    x(index),
+                    y(index),
                     event.getPointerId(index),
                 )
                 Native.nativeSendTouchFrame()
@@ -320,8 +373,8 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
                 for (i in 0 until event.pointerCount) {
                     Native.nativeSendTouch(
                         2,
-                        event.getX(i),
-                        event.getY(i),
+                        x(i),
+                        y(i),
                         event.getPointerId(i),
                     )
                 }
@@ -329,11 +382,12 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
             }
 
             MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_POINTER_UP -> {
+            MotionEvent.ACTION_POINTER_UP,
+            -> {
                 Native.nativeSendTouch(
                     1,
-                    event.getX(index),
-                    event.getY(index),
+                    x(index),
+                    y(index),
                     event.getPointerId(index),
                 )
                 Native.nativeSendTouchFrame()
@@ -343,8 +397,8 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
                 for (i in 0 until event.pointerCount) {
                     Native.nativeSendTouch(
                         1,
-                        event.getX(i),
-                        event.getY(i),
+                        x(i),
+                        y(i),
                         event.getPointerId(i),
                     )
                 }
@@ -354,72 +408,31 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         return true
     }
 
-    private fun handleTrackpad(event: MotionEvent): Boolean {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downTime = event.eventTime
-                downX = event.x
-                downY = event.y
-                lastX = event.x
-                lastY = event.y
-                secondLastY = event.y
-                moved = false
-                return true
-            }
-
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                if (event.pointerCount == 2) {
-                    secondLastY = (event.getY(0) + event.getY(1)) / 2f
-                }
-                return true
-            }
-
-            MotionEvent.ACTION_MOVE -> {
-                if (event.pointerCount >= 2) {
-                    val y = (event.getY(0) + event.getY(1)) / 2f
-                    val dy = y - secondLastY
-                    if (abs(dy) > .25f) {
-                        Native.nativeSendMouseScroll(0, dy * .7f)
-                        moved = true
-                    }
-                    secondLastY = y
-                    return true
-                }
-
-                val dx = event.x - lastX
-                val dy = event.y - lastY
-                if (hypot(
-                        (event.x - downX).toDouble(),
-                        (event.y - downY).toDouble(),
-                    ) > 6.0
-                ) {
-                    moved = true
-                }
-
-                val acceleration = 1.35f
-                pointerX = (pointerX + dx * acceleration).coerceIn(0f, width.toFloat())
-                pointerY = (pointerY + dy * acceleration).coerceIn(0f, height.toFloat())
-                Native.nativeSendMouseMotion(
-                    pointerX,
-                    pointerY,
-                    dx * acceleration,
-                    dy * acceleration,
-                )
-                lastX = event.x
-                lastY = event.y
-                return true
-            }
-
-            MotionEvent.ACTION_UP -> {
-                val duration = event.eventTime - downTime
-                if (!moved && duration < 280) {
-                    Native.nativeSendMouseButton(0x110, true)
-                    Native.nativeSendMouseButton(0x110, false)
-                }
-                return true
-            }
+    private fun primePointerForTrackpad() {
+        if (pointerPrimed || !consumerStarted || options.inputMode != InputMode.TRACKPAD) {
+            return
         }
-        return true
+
+        val targetWidth = consumerWidth.takeIf { it > 0 } ?: width
+        val targetHeight = consumerHeight.takeIf { it > 0 } ?: height
+        pointerX = targetWidth / 2f
+        pointerY = targetHeight / 2f
+
+        // Do this only after the user actually interacts in trackpad mode. The
+        // old startup "pointer wake" made a cursor appear even in Direct mode.
+        Native.nativeSendMouseMotion(pointerX, pointerY, 0.01f, 0f)
+        pointerPrimed = true
+    }
+
+    private fun moveRelativePointer(dx: Float, dy: Float) {
+        if (!consumerStarted) return
+        primePointerForTrackpad()
+
+        val maxX = (consumerWidth.takeIf { it > 0 } ?: width).toFloat()
+        val maxY = (consumerHeight.takeIf { it > 0 } ?: height).toFloat()
+        pointerX = (pointerX + dx).coerceIn(0f, maxX)
+        pointerY = (pointerY + dy).coerceIn(0f, maxY)
+        Native.nativeSendMouseMotion(pointerX, pointerY, dx, dy)
     }
 
     private fun handleMouse(event: MotionEvent): Boolean {
@@ -433,20 +446,49 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
         val relativeX = event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
         val relativeY = event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
-        pointerX = if (relativeX != 0f) {
-            (pointerX + relativeX).coerceIn(0f, width.toFloat())
-        } else {
-            event.x.coerceIn(0f, width.toFloat())
-        }
-        pointerY = if (relativeY != 0f) {
-            (pointerY + relativeY).coerceIn(0f, height.toFloat())
-        } else {
-            event.y.coerceIn(0f, height.toFloat())
+        val maxX = (consumerWidth.takeIf { it > 0 } ?: width).toFloat()
+        val maxY = (consumerHeight.takeIf { it > 0 } ?: height).toFloat()
+
+        if (relativeX != 0f || relativeY != 0f) {
+            pointerX = (pointerX + relativeX).coerceIn(0f, maxX)
+            pointerY = (pointerY + relativeY).coerceIn(0f, maxY)
+            Native.nativeSendMouseMotion(
+                pointerX,
+                pointerY,
+                relativeX,
+                relativeY,
+            )
+        } else if (
+            event.actionMasked == MotionEvent.ACTION_MOVE ||
+            event.actionMasked == MotionEvent.ACTION_HOVER_MOVE ||
+            event.actionMasked == MotionEvent.ACTION_DOWN ||
+            event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
+            event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE
+        ) {
+            val sx = if (width > 0) maxX / width else 1f
+            val sy = if (height > 0) maxY / height else 1f
+            val nextX = (event.x * sx).coerceIn(0f, maxX)
+            val nextY = (event.y * sy).coerceIn(0f, maxY)
+            val dx = nextX - pointerX
+            val dy = nextY - pointerY
+            pointerX = nextX
+            pointerY = nextY
+            Native.nativeSendMouseMotion(pointerX, pointerY, dx, dy)
         }
 
-        Native.nativeSendMouseMotion(pointerX, pointerY, relativeX, relativeY)
-        syncButtons(event.buttonState)
+        pointerPrimed = true
+        syncButtons(effectiveButtonState(event))
         return true
+    }
+
+    private fun effectiveButtonState(event: MotionEvent): Int {
+        var state = event.buttonState
+        when (event.actionMasked) {
+            MotionEvent.ACTION_BUTTON_PRESS -> state = state or event.actionButton
+            MotionEvent.ACTION_BUTTON_RELEASE -> state = state and event.actionButton.inv()
+            MotionEvent.ACTION_CANCEL -> state = 0
+        }
+        return state
     }
 
     private fun syncButtons(buttonState: Int) {
@@ -460,7 +502,9 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         for ((androidButton, evdev) in mappings) {
             val wasDown = lastButtons and androidButton != 0
             val isDown = buttonState and androidButton != 0
-            if (wasDown != isDown) Native.nativeSendMouseButton(evdev, isDown)
+            if (wasDown != isDown && consumerStarted) {
+                Native.nativeSendMouseButton(evdev, isDown)
+            }
         }
         lastButtons = buttonState
     }

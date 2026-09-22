@@ -26,13 +26,17 @@ class SettingsScreen extends StatelessWidget {
                       ButtonSegment(value: 120, label: Text('120 Hz')),
                     ],
                     selected: {controller.refreshRate},
-                    onSelectionChanged: (value) => controller.setRefreshRate(value.first),
+                    onSelectionChanged: (value) =>
+                        controller.setRefreshRate(value.first),
                   ),
                   const SizedBox(height: 18),
                   Row(
                     children: [
                       const Expanded(child: Text('Desktop scale')),
-                      Text('${controller.desktopScale.toStringAsFixed(2)}×', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Text(
+                        '${controller.desktopScale.toStringAsFixed(2)}×',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ],
                   ),
                   Slider(
@@ -50,11 +54,27 @@ class SettingsScreen extends StatelessWidget {
                 children: [
                   SegmentedButton<String>(
                     segments: const [
-                      ButtonSegment(value: 'trackpad', icon: Icon(Icons.mouse_outlined), label: Text('Trackpad')),
-                      ButtonSegment(value: 'touch', icon: Icon(Icons.touch_app_outlined), label: Text('Direct')),
+                      ButtonSegment(
+                        value: 'trackpad',
+                        icon: Icon(Icons.mouse_outlined),
+                        label: Text('Trackpad'),
+                      ),
+                      ButtonSegment(
+                        value: 'direct',
+                        icon: Icon(Icons.touch_app_outlined),
+                        label: Text('Direct'),
+                      ),
                     ],
                     selected: {controller.inputMode},
-                    onSelectionChanged: (value) => controller.setInputMode(value.first),
+                    onSelectionChanged: (value) =>
+                        controller.setInputMode(value.first),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    controller.inputMode == 'direct'
+                        ? 'Direct: the Linux desktop follows your finger like a touchscreen.'
+                        : 'Trackpad: move the cursor with one finger, tap to click, hold to drag, two-finger scroll, and two-finger tap to right-click.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
@@ -73,11 +93,13 @@ class SettingsScreen extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.monitor_heart_outlined),
                     title: const Text('Diagnostics'),
-                    subtitle: const Text('Runtime state, display transport and logs'),
+                    subtitle:
+                        const Text('Runtime state, display transport and logs'),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => DiagnosticsScreen(controller: controller),
+                        builder: (_) =>
+                            DiagnosticsScreen(controller: controller),
                       ),
                     ),
                   ),
@@ -147,7 +169,13 @@ class _Section extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+            Text(
+              title,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
             const SizedBox(height: 18),
             ...children,
           ],

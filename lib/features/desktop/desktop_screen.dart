@@ -67,10 +67,6 @@ class _DesktopScreenState extends State<DesktopScreen> {
               onStart: widget.controller.start,
             ),
           ),
-        if (snapshot.phase == RuntimePhase.starting)
-          Positioned.fill(
-            child: _StartupOverlay(snapshot: snapshot),
-          ),
         if (snapshot.phase == RuntimePhase.stopping)
           const Positioned.fill(
             child: _RuntimeOverlay(
@@ -228,101 +224,6 @@ class _IdleDesktop extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _StartupOverlay extends StatelessWidget {
-  const _StartupOverlay({required this.snapshot});
-
-  final RuntimeSnapshot snapshot;
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = snapshot.progress.clamp(0.0, 1.0);
-    final percent = (progress * 100).round();
-    final details = snapshot.stageDetail?.trim();
-
-    return Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 470),
-          margin: const EdgeInsets.all(24),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xF0181A20),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Starting Linux',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 21,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '$percent%',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                snapshot.message,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 16),
-              LinearProgressIndicator(
-                value: progress > 0 ? progress : null,
-                minHeight: 9,
-                borderRadius: BorderRadius.circular(99),
-              ),
-              if (details != null && details.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xCC0D0F13),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white10),
-                  ),
-                  child: Text(
-                    details,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontFamily: 'monospace',
-                      fontSize: 12.5,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 12),
-              Text(
-                snapshot.elapsedSeconds > 0
-                    ? 'Elapsed ${snapshot.elapsedSeconds}s'
-                    : 'Initializing runtime…',
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
     );
   }
 }

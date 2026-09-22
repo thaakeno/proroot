@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-safe-stop-transparent-surface-v11
+# rebuild marker: proroot-v128-stable-surface-anland-input-v12
 
 on:
   push:
