@@ -360,15 +360,10 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun stop() {
         scope.launch {
             mutex.withLock {
-                RuntimeEvents.publish(
-                    RuntimeStatus(
-                        phase = RuntimePhase.stopping,
-                        message = "Stopping Linux",
-                        installed = paths.installMarker.isFile,
-                        running = true,
-                    ),
-                )
-                val consumerStopped = stopDisplayConsumerBeforeRuntime()
+                // Remove the Flutter platform view first. Its normal Android
+                // dispose/surfaceDestroyed path owns nativeStop(), matching
+                // upstream Anland. Only fall back to an explicit stop if Flutter
+                // fails to detach the view in time.
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = RuntimePhase.stopping,
@@ -377,6 +372,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                         running = false,
                     ),
                 )
+                val consumerStopped = detachDisplayConsumerForRuntimeStop()
                 session.stop()
                 systemServices.stop()
                 stopDisplayTransportAfterConsumerStop(consumerStopped)
@@ -400,18 +396,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                         phase = RuntimePhase.stopping,
                         message = "Resetting Linux",
                         installed = paths.installMarker.isFile,
-                        running = session.isRunning(),
-                    ),
-                )
-                val consumerStopped = stopDisplayConsumerBeforeRuntime()
-                RuntimeEvents.publish(
-                    RuntimeStatus(
-                        phase = RuntimePhase.stopping,
-                        message = "Resetting Linux",
-                        installed = paths.installMarker.isFile,
                         running = false,
                     ),
                 )
+                val consumerStopped = detachDisplayConsumerForRuntimeStop()
                 session.stop()
                 systemServices.stop()
                 stopDisplayTransportAfterConsumerStop(consumerStopped)
@@ -464,6 +452,15 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     fun deviceInfo(): Map<String, Any?> =
         deviceInfoCollector.collect()
+
+    private fun detachDisplayConsumerForRuntimeStop(): Boolean {
+        if (LinuxDisplayRegistry.awaitDetached(timeoutMs = 5_000)) return true
+
+        File(paths.logsDir, "anland-daemon.log").appendText(
+            "display view did not detach within 5s; falling back to explicit consumer stop\n",
+        )
+        return stopDisplayConsumerBeforeRuntime()
+    }
 
     private fun stopDisplayConsumerBeforeRuntime(): Boolean {
         val stopped = LinuxDisplayRegistry.stopConsumerAndAwait()
