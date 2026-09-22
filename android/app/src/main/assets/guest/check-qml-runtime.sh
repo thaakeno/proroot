@@ -21,6 +21,8 @@ test -r "$qml_root/org/kde/ksvg/libcorebindingsplugin.so"
 
 echo "===== org.kde.plasma.core/qmldir ====="
 cat "$qml_root/org/kde/plasma/core/qmldir"
+echo "===== org.kde.ksvg/qmldir ====="
+cat "$qml_root/org/kde/ksvg/qmldir"
 echo "===== plasma core plugin dependencies ====="
 ldd "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so"
 if ldd "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so" | grep -q 'not found'; then
@@ -29,8 +31,12 @@ if ldd "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so" | grep -q 'not f
 fi
 
 echo "===== KSvg plugin dependencies ====="
-ldd "$qml_root/org/kde/ksvg/libcorebindingsplugin.so"
-if ldd "$qml_root/org/kde/ksvg/libcorebindingsplugin.so" | grep -q 'not found'; then
+ksvg_plugin="$qml_root/org/kde/ksvg/libproroot_ksvg_corebindingsplugin.so"
+if [[ ! -r "$ksvg_plugin" ]]; then
+    ksvg_plugin="$qml_root/org/kde/ksvg/libcorebindingsplugin.so"
+fi
+ldd "$ksvg_plugin"
+if ldd "$ksvg_plugin" | grep -q 'not found'; then
     echo "KSvg QML plugin has unresolved shared libraries" >&2
     exit 69
 fi
