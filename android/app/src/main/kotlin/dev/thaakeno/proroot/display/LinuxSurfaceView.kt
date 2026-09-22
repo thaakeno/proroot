@@ -2,8 +2,6 @@ package dev.thaakeno.proroot.display
 
 import android.content.Context
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.text.InputType
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -19,22 +17,16 @@ import com.anland.termux.Native
 import com.anland.termux.VirtualTouchpadBridge
 import dev.thaakeno.proroot.runtime.RuntimePaths
 import java.io.File
-import kotlin.math.abs
 
 class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
     private val paths = RuntimePaths(context)
     private val callbackBridge = AnlandCallbackBridge(context)
     private val inputMethod = context.getSystemService(InputMethodManager::class.java)
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    private var pendingSurfaceRestart: Runnable? = null
     private var consumerStarted = false
     private var runtimeStopping = false
     private var consumerWidth = 0
     private var consumerHeight = 0
     private var surfaceFormat = 0
-    private var layoutWidth = 0
-    private var layoutHeight = 0
     private var options = DisplaySettings.current
 
     private var pointerX = 0f
@@ -74,6 +66,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        logLifecycle("surfaceCreated")
         requestFocus()
     }
 
@@ -102,22 +95,18 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        layoutWidth = w
-        layoutHeight = h
         touchpad.onSurfaceChanged()
 
-        if (runtimeStopping || !consumerStarted || w <= 0 || h <= 0) return
-
-        // Keyboard/nav-bar changes are height-only in portrait. Keep Anland's
-        // transport alive. A width change is an actual orientation/window-size
-        // change, so reconnect once after the layout has settled.
-        if (oldw > 0 && abs(w - consumerWidth) >= 8) {
-            scheduleSurfaceRestart(surfaceFormat, w, h)
+        if (consumerStarted && w > 0 && h > 0) {
+            // Flutter, IME and system-inset changes must not tear down Anland.
+            // Android can scale the existing buffer queue while input remains
+            // mapped against the consumer resolution.
+            applyFrameRate(holder.surface, options.refreshRate)
         }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        cancelPendingSurfaceRestart()
+        logLifecycle("surfaceDestroyed")
         releaseInputState()
         stopConsumerForRuntime()
         consumerWidth = 0
@@ -127,13 +116,14 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     fun prepareForRuntimeStop() {
         runtimeStopping = true
-        cancelPendingSurfaceRestart()
+        logLifecycle("prepareForRuntimeStop")
         releaseInputState()
         stopConsumerForRuntime()
     }
 
     fun stopConsumerForRuntime() {
         if (!consumerStarted) return
+        Native.nativeSetAudioKeepalive(false)
         val error = runCatching {
             Native.nativeStop()
         }.exceptionOrNull()
@@ -147,7 +137,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     fun dispose() {
         runtimeStopping = true
-        cancelPendingSurfaceRestart()
+        logLifecycle("dispose")
         releaseInputState()
         stopConsumerForRuntime()
         callbackBridge.dispose()
@@ -159,36 +149,6 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         touchpad.reset()
         if (consumerStarted && lastButtons != 0) syncButtons(0)
         runCatching { releasePointerCapture() }
-    }
-
-    private fun scheduleSurfaceRestart(format: Int, width: Int, height: Int) {
-        cancelPendingSurfaceRestart()
-        val restart = Runnable {
-            pendingSurfaceRestart = null
-            if (runtimeStopping || width <= 0 || height <= 0) return@Runnable
-
-            val surface = holder.surface
-            if (!surface.isValid) return@Runnable
-
-            releaseInputState()
-            stopConsumerForRuntime()
-            if (consumerStarted) return@Runnable
-
-            surfaceFormat = format
-            consumerWidth = width
-            consumerHeight = height
-            startConsumerSafely(surface, width, height)
-        }
-        pendingSurfaceRestart = restart
-
-        // Long enough to ride out Android rotation/inset animations, short enough
-        // that a real orientation change still feels immediate.
-        mainHandler.postDelayed(restart, 650L)
-    }
-
-    private fun cancelPendingSurfaceRestart() {
-        pendingSurfaceRestart?.let(mainHandler::removeCallbacks)
-        pendingSurfaceRestart = null
     }
 
     private fun startConsumerSafely(surface: Surface, width: Int, height: Int) {
@@ -230,6 +190,16 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
             paths.logsDir.mkdirs()
             File(paths.logsDir, "anland-consumer.log").appendText(
                 "$prefix: ${error.stackTraceToString()}\n",
+            )
+        }
+    }
+
+    private fun logLifecycle(event: String) {
+        runCatching {
+            paths.logsDir.mkdirs()
+            File(paths.logsDir, "anland-consumer-lifecycle.log").appendText(
+                "${System.currentTimeMillis()} $event started=$consumerStarted " +
+                    "stopping=$runtimeStopping size=${width}x${height}\n",
             )
         }
     }
