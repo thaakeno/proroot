@@ -38,6 +38,7 @@ class RuntimeEngine private constructor(private val context: Context) {
     )
     private val appCatalog = DesktopAppCatalog(paths)
     private val appLauncher = DesktopAppLauncher(paths)
+    private val deviceInfoCollector = DeviceInfoCollector(context, paths)
     private val diagnosticsCollector = RuntimeDiagnostics(
         context = context,
         paths = paths,
@@ -460,6 +461,9 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     fun diagnostics(): Map<String, Any?> =
         diagnosticsCollector.collect(status())
+
+    fun deviceInfo(): Map<String, Any?> =
+        deviceInfoCollector.collect()
 
     private fun stopDisplayConsumerBeforeRuntime(): Boolean {
         val stopped = LinuxDisplayRegistry.stopConsumerAndAwait()
