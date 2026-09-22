@@ -61,6 +61,27 @@ jobs:
             aarch64-linux-gnu-objdump -dC --start-address=0xd4f80 --stop-address=0xd5080 "$libc"
           } | tee symbolicate.txt
 
+      - name: Disassemble ProRoot v1.2.8 signal path
+        run: |
+          set -euxo pipefail
+          curl -fL https://raw.githubusercontent.com/coderredlab/proroot/v1.2.8/arm64-v8a/libproroot-runtime.so -o /tmp/libproroot-runtime.so
+          {
+            echo
+            echo "=== ProRoot signal / kill symbols ==="
+            aarch64-linux-gnu-nm -anC /tmp/libproroot-runtime.so | grep -E ' (raise|kill|tkill|tgkill|signal|proroot_sigsegv_handler|proroot_sigsys_handler|proroot_load_user_sigsys|proroot_record_user_sigsys)        with:
+          name: proroot-symbolication
+          path: symbolicate.txt
+ || true
+            for sym in kill tkill tgkill signal proroot_sigsegv_handler; do
+              echo
+              echo "=== $sym ==="
+              aarch64-linux-gnu-objdump -dC --disassemble="$sym" /tmp/libproroot-runtime.so
+            done
+            echo
+            echo "=== strings: trace controls ==="
+            strings -tx /tmp/libproroot-runtime.so | grep -E 'PROROOT_TRACE_KILL|PROROOT_TRACE_SIGSEGV_STACK|proroot-sigsegv-maps|SIGSEGV pc=' || true
+          } | tee -a symbolicate.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: proroot-symbolication
