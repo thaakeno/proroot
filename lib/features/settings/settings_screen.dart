@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/build_info.dart';
 import '../../core/state/runtime_controller.dart';
 import '../diagnostics/diagnostics_screen.dart';
+import '../device/device_info_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({required this.controller, super.key});
@@ -100,6 +101,20 @@ class SettingsScreen extends StatelessWidget {
                       MaterialPageRoute(
                         builder: (_) =>
                             DiagnosticsScreen(controller: controller),
+                      ),
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.developer_board_rounded),
+                    title: const Text('Device info'),
+                    subtitle: const Text('CPU, GPU, RAM, storage and system'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            DeviceInfoScreen(controller: controller),
                       ),
                     ),
                   ),
