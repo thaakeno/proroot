@@ -217,8 +217,9 @@ class RuntimeEngine private constructor(private val context: Context) {
 
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransport()
                 publishStartFailure(failure)
+                stopDisplayTransportAfterViewDetach()
+                stopForegroundHost()
             }
         }
     }
@@ -245,7 +246,6 @@ class RuntimeEngine private constructor(private val context: Context) {
                     mutex.withLock {
                         if (RuntimeEvents.latest.phase != RuntimePhase.running) return@withLock
                         systemServices.stop()
-                        stopDisplayTransport()
                         RuntimeEvents.publish(
                             RuntimeStatus(
                                 phase = RuntimePhase.failed,
@@ -254,6 +254,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                                 installed = true,
                             ),
                         )
+                        stopDisplayTransportAfterViewDetach()
                         stopForegroundHost()
                     }
                 }
@@ -348,8 +349,8 @@ class RuntimeEngine private constructor(private val context: Context) {
                 installed = paths.installMarker.isFile,
             ),
         )
-        stopForegroundHost()
     }
+
     fun stop() {
         scope.launch {
             mutex.withLock {
@@ -363,7 +364,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 )
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransport()
+                stopDisplayTransportAfterViewDetach()
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = if (paths.installMarker.isFile) RuntimePhase.ready else RuntimePhase.missing,
@@ -379,9 +380,17 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun reset() {
         scope.launch {
             mutex.withLock {
+                RuntimeEvents.publish(
+                    RuntimeStatus(
+                        phase = RuntimePhase.stopping,
+                        message = "Resetting Linux",
+                        installed = paths.installMarker.isFile,
+                        running = session.isRunning(),
+                    ),
+                )
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransport()
+                stopDisplayTransportAfterViewDetach()
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()
                 paths.rootfsPrevious.deleteRecursively()
@@ -429,9 +438,15 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun diagnostics(): Map<String, Any?> =
         diagnosticsCollector.collect(status())
 
-    private fun stopDisplayTransport() {
-        LinuxDisplayRegistry.stopConsumerAndWait()
-        daemon.stop()
+    private fun stopDisplayTransportAfterViewDetach() {
+        val detached = LinuxDisplayRegistry.awaitDetached()
+        if (detached) {
+            daemon.stop()
+        } else {
+            File(paths.logsDir, "anland-daemon.log").appendText(
+                "display consumer did not detach within 5s; keeping daemon alive to avoid JNI teardown race\n",
+            )
+        }
     }
 
     private fun startForegroundHost() {
