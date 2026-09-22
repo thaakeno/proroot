@@ -130,6 +130,10 @@ export ELECTRON_OZONE_PLATFORM_HINT=wayland
 # path instead of maintaining app-specific launch commands.
 python3 /usr/local/lib/proroot/prepare-app-runtime.py     >"$log_dir/app-runtime-compat.log" 2>&1 || true
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+XDG_MENU_PREFIX=plasma- \
+XDG_CONFIG_DIRS=/etc/xdg \
+XDG_DATA_DIRS=/usr/local/share:/usr/share \
+  kbuildsycoca6 --noincremental >"$log_dir/kbuildsycoca.log" 2>&1 || true
 
 env_file="$runtime/proroot-session.env"
 persist_env() {
@@ -142,7 +146,7 @@ persist_env() {
 {
     for name in \
         HOME USER LOGNAME SHELL LANG LC_ALL \
-        XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR \
+        XDG_CONFIG_HOME XDG_CONFIG_DIRS XDG_CACHE_HOME XDG_DATA_HOME XDG_DATA_DIRS XDG_STATE_HOME XDG_RUNTIME_DIR XDG_MENU_PREFIX \
         XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
         DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS \
         PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH PULSE_SERVER \
