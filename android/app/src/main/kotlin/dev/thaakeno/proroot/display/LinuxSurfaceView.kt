@@ -156,7 +156,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     private fun releaseInputState() {
-        touchpad.cancel()
+        touchpad.reset()
         if (consumerStarted && lastButtons != 0) syncButtons(0)
         runCatching { releasePointerCapture() }
     }
