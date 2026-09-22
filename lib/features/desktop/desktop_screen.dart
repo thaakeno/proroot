@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
+import '../device/device_info_screen.dart';
 
 class DesktopScreen extends StatefulWidget {
   const DesktopScreen({
@@ -153,6 +154,17 @@ class _DesktopScreenState extends State<DesktopScreen> {
                       ? Icons.mouse_rounded
                       : Icons.touch_app_outlined,
                 ),
+              ),
+              IconButton(
+                tooltip: 'Device info',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        DeviceInfoScreen(controller: widget.controller),
+                  ),
+                ),
+                color: Colors.white,
+                icon: const Icon(Icons.developer_board_rounded),
               ),
               IconButton(
                 tooltip: 'Stop Linux',
