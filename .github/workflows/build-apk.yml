@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-minimal-plasma-readiness-v5
+# rebuild marker: proroot-v128-ksvg-stable-surface-v6
 
 on:
   push:
