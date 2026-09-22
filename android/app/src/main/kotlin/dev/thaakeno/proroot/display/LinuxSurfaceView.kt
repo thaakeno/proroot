@@ -1,7 +1,6 @@
 package dev.thaakeno.proroot.display
 
 import android.content.Context
-import android.graphics.Color
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -55,7 +54,6 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     init {
-        setBackgroundColor(Color.BLACK)
         isFocusable = true
         isFocusableInTouchMode = true
         holder.addCallback(this)
