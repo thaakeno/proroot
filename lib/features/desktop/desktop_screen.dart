@@ -52,9 +52,8 @@ class _DesktopScreenState extends State<DesktopScreen> {
   @override
   Widget build(BuildContext context) {
     final snapshot = widget.controller.snapshot;
-    final keepSurfaceMounted = snapshot.running ||
-        snapshot.phase == RuntimePhase.starting ||
-        snapshot.phase == RuntimePhase.stopping;
+    final keepSurfaceMounted =
+        snapshot.running || snapshot.phase == RuntimePhase.starting;
 
     return ColoredBox(
       color: Colors.black,
