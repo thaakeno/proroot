@@ -83,6 +83,11 @@ if wait_for_socket "$runtime/pipewire-0"; then
     wait_for_socket "$pulse_dir/native" 50 || true
 fi
 
+# dbus-run-session and the session dbus-daemon were launched while ProRoot's
+# normal syscall patching was still enabled. Disable only the inline ARM64
+# patcher for the Qt/KDE side, where v1.2.8 has been unstable on this device.
+export PROROOT_NO_PATCH=1
+
 env_file="$runtime/proroot-session.env"
 persist_env() {
     local name="$1"

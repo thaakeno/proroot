@@ -3,6 +3,7 @@ package dev.thaakeno.proroot.runtime
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import dev.thaakeno.proroot.display.LinuxDisplayRegistry
 import dev.thaakeno.proroot.install.RuntimeInstaller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -216,7 +217,7 @@ class RuntimeEngine private constructor(private val context: Context) {
 
                 session.stop()
                 systemServices.stop()
-                daemon.stop()
+                stopDisplayTransport()
                 publishStartFailure(failure)
             }
         }
@@ -244,7 +245,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                     mutex.withLock {
                         if (RuntimeEvents.latest.phase != RuntimePhase.running) return@withLock
                         systemServices.stop()
-                        daemon.stop()
+                        stopDisplayTransport()
                         RuntimeEvents.publish(
                             RuntimeStatus(
                                 phase = RuntimePhase.failed,
@@ -362,7 +363,7 @@ class RuntimeEngine private constructor(private val context: Context) {
                 )
                 session.stop()
                 systemServices.stop()
-                daemon.stop()
+                stopDisplayTransport()
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = if (paths.installMarker.isFile) RuntimePhase.ready else RuntimePhase.missing,
@@ -380,7 +381,7 @@ class RuntimeEngine private constructor(private val context: Context) {
             mutex.withLock {
                 session.stop()
                 systemServices.stop()
-                daemon.stop()
+                stopDisplayTransport()
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()
                 paths.rootfsPrevious.deleteRecursively()
@@ -427,6 +428,11 @@ class RuntimeEngine private constructor(private val context: Context) {
 
     fun diagnostics(): Map<String, Any?> =
         diagnosticsCollector.collect(status())
+
+    private fun stopDisplayTransport() {
+        LinuxDisplayRegistry.stopConsumerAndWait()
+        daemon.stop()
+    }
 
     private fun startForegroundHost() {
         ContextCompat.startForegroundService(

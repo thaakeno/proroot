@@ -153,7 +153,12 @@ class ProrootRunner(
                 "PROROOT_TRACE_KILL" to "1",
                 "PROROOT_TRACE_SIGSEGV_STACK" to "1",
             ),
-        ).start()
+        ).apply {
+            // The bootstrap shell and dbus-run-session must keep normal ProRoot
+            // syscall patching so exec/NSS/path translation works. The guest
+            // session script enables PROROOT_NO_PATCH only for Qt/KDE children.
+            environment().remove("PROROOT_NO_PATCH")
+        }.start()
 
     override fun startDetachedUser(shellCommand: String, logFile: File): Process {
         logFile.parentFile?.mkdirs()

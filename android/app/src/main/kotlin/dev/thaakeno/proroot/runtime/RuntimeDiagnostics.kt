@@ -266,14 +266,21 @@ class RuntimeDiagnostics(
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         return runCatching {
             manager.getHistoricalProcessExitReasons(context.packageName, 0, 6).map { info ->
-                mapOf(
+                val trace = runCatching {
+                    info.traceInputStream
+                        ?.bufferedReader()
+                        ?.use { reader -> reader.readText().takeLast(24_000) }
+                }.getOrNull()
+                linkedMapOf<String, Any?>(
                     "timestamp" to info.timestamp,
                     "reason" to exitReason(info.reason),
                     "reasonCode" to info.reason,
                     "status" to info.status,
                     "importance" to info.importance,
                     "description" to info.description,
-                )
+                ).apply {
+                    if (!trace.isNullOrBlank()) put("trace", trace)
+                }
             }
         }.getOrDefault(emptyList())
     }

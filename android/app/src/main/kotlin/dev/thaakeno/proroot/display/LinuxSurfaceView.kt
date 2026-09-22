@@ -72,8 +72,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
             return
         }
 
-        if (consumerStarted) Native.nativeStop()
-        consumerStarted = false
+        stopConsumerForRuntime()
         surfaceWidth = width
         surfaceHeight = height
         surfaceFormat = format
@@ -81,16 +80,20 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        if (consumerStarted) Native.nativeStop()
-        consumerStarted = false
+        stopConsumerForRuntime()
         surfaceWidth = 0
         surfaceHeight = 0
         surfaceFormat = 0
     }
 
-    fun dispose() {
-        if (consumerStarted) Native.nativeStop()
+    fun stopConsumerForRuntime() {
+        if (!consumerStarted) return
+        Native.nativeStop()
         consumerStarted = false
+    }
+
+    fun dispose() {
+        stopConsumerForRuntime()
         callbackBridge.dispose()
         DisplaySettings.removeListener(optionsListener)
         holder.removeCallback(this)
