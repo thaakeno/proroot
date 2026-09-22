@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-ksvg-unset-safe-v7
+# rebuild marker: proroot-v128-textureview-stable-surface-v8
 
 on:
   push:
