@@ -27,6 +27,7 @@ unset ANLAND_NO_DRM_DEVICE ANLAND_DRM_DEVICE EGL_PLATFORM
 unset ANLAND_PIPEWIRE_UNRESTRICTED ANLAND_SOFTWARE_SESSION
 unset MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER
 unset FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS
+unset LIBGL_ALWAYS_SOFTWARE MESA_LOADER_DRIVER_OVERRIDE
 unset PROROOT_NO_PATCH
 
 mkdir -p     "$runtime"     /tmp/.X11-unix     "$XDG_CONFIG_HOME"     "$XDG_CACHE_HOME"     "$XDG_DATA_HOME"     "$XDG_STATE_HOME"
@@ -55,17 +56,25 @@ export CLUTTER_BACKEND=wayland
 
 export ANLAND=1
 export ANLAND_SOCKET=/tmp/anland/display_daemon.sock
-export ANLAND_NO_DRM_DEVICE=1
 export ANLAND_PIPEWIRE_UNRESTRICTED=1
 export EGL_PLATFORM=surfaceless
 
-if [[ -r /dev/kgsl-3d0 ]]; then
-    export MESA_LOADER_DRIVER_OVERRIDE=kgsl
-    export TURNIP_KMD=kgsl
-    export GALLIUM_DRIVER=freedreno
-    export FD_FORCE_KGSL=1
-    export XWAYLAND_FORCE_KGSL_SURFACELESS=1
+# ProRoot PC targets Snapdragon/KGSL hardware acceleration. Do not silently
+# downgrade KWin's internal Qt Quick renderer to the SHM/software path. The
+# Anland KWin backend already accepts an explicit render-device override; Mesa's
+# KGSL build can create GBM/DRI resources directly from /dev/kgsl-3d0 when the
+# kgsl loader is selected.
+if [[ ! -r /dev/kgsl-3d0 ]]; then
+    echo "KGSL render device /dev/kgsl-3d0 is unavailable; refusing software rendering fallback" >&2
+    exit 72
 fi
+
+export ANLAND_DRM_DEVICE=/dev/kgsl-3d0
+export MESA_LOADER_DRIVER_OVERRIDE=kgsl
+export TURNIP_KMD=kgsl
+export GALLIUM_DRIVER=freedreno
+export FD_FORCE_KGSL=1
+export XWAYLAND_FORCE_KGSL_SURFACELESS=1
 
 export PROROOT_REFRESH_HZ="$refresh"
 export PIPEWIRE_RUNTIME_DIR="$runtime"
