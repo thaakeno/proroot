@@ -22,7 +22,7 @@ class RuntimeDiagnostics(
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
         val crashLog = File(paths.logsDir, "proroot-crash.log")
         val recordedRuntimeCrash = crashLog
-            .takeIf(File::isFile)
+            .takeIf { it.isFile }
             ?.readText()
             ?.let { log ->
                 log.contains("[proroot] SIGSEGV") ||
@@ -32,15 +32,15 @@ class RuntimeDiagnostics(
         val safeDiagnostics = installed &&
             (recordedRuntimeCrash || status.phase == RuntimePhase.failed)
         val logs = paths.logsDir.listFiles()
-            ?.filter(File::isFile)
-            ?.sortedByDescending(File::lastModified)
+            ?.filter { it.isFile }
+            ?.sortedByDescending { it.lastModified() }
             ?.associate { file ->
                 file.name to readTail(file, 120_000)
             }
             ?: emptyMap()
         val prorootCrashDumps = paths.prorootCrashDumps
             .filter { it.isFile && it.length() > 0L }
-            .distinctBy(File::absolutePath)
+            .distinctBy { it.absolutePath }
             .associate { dump ->
                 "${dump.parentFile?.name}/${dump.name}" to mapOf(
                     "path" to dump.absolutePath,
@@ -53,7 +53,7 @@ class RuntimeDiagnostics(
             .listFiles()
             ?.asSequence()
             ?.map { File(it, "proroot-session.env") }
-            ?.firstOrNull(File::isFile)
+            ?.firstOrNull { it.isFile }
             ?.let { readTail(it, 20_000) }
 
         val probes = if (installed && !safeDiagnostics) {
@@ -216,11 +216,11 @@ class RuntimeDiagnostics(
             "stagingRootfsExists" to paths.rootfsStaging.isDirectory,
             "downloadCacheBytes" to paths.cacheDir
                 .walkTopDown()
-                .filter(File::isFile)
+                .filter { it.isFile }
                 .sumOf { it.length() },
             "aptArchiveCacheBytes" to paths.aptArchivesDir
                 .walkTopDown()
-                .filter(File::isFile)
+                .filter { it.isFile }
                 .sumOf { it.length() },
             "stagingResumeMarker" to File(
                 paths.rootfsStaging,
@@ -239,7 +239,7 @@ class RuntimeDiagnostics(
         val nativeDir = File(context.applicationInfo.nativeLibraryDir)
         return nativeDir.listFiles()
             ?.filter { it.isFile && it.name.startsWith("libproroot") && it.name.endsWith(".so") }
-            ?.sortedBy(File::name)
+            ?.sortedBy { it.name }
             ?.associate { library ->
                 library.name to mapOf(
                     "bytes" to library.length(),
