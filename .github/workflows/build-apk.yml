@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-dbus-bootstrap-anland-teardown-v3
+# rebuild marker: proroot-v128-minimal-plasma-safe-teardown-v4
 
 on:
   push:
