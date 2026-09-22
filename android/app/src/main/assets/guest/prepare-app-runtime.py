@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Create per-session desktop-entry overrides for Chromium/Electron runtimes.
+"""Create per-session desktop-entry overrides for runtime families.
 
-This is capability-based rather than app-id based: any desktop entry whose
-executable identifies itself as Chromium or Electron gets the same PRoot
-sandbox/Wayland launcher. PRoot cannot provide Chromium's Linux namespaces.
+This is capability-based rather than app-id based. Chromium/Electron share one
+policy and Mozilla-family applications share another, so newly installed ARM64
+apps inherit the same compatibility behavior without maintaining app-name
+patches.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", "/home/linux"))
 OVERRIDE_DIR = HOME / ".local/share/applications"
-WRAPPER = "/usr/local/lib/proroot/launch-chromium-runtime.sh"
+WRAPPER = "/usr/local/lib/proroot/launch-app-runtime.sh"
 SEARCH_DIRS = (
     Path("/usr/share/applications"),
     Path("/usr/local/share/applications"),
@@ -79,9 +80,12 @@ def classify(executable: str) -> str | None:
         return None
 
     lowered_path = str(resolved).lower()
-    if "electron" in resolved.name.lower():
+    lowered_name = resolved.name.lower()
+    if "firefox" in lowered_name or "mozilla" in lowered_path:
+        return "mozilla"
+    if "electron" in lowered_name:
         return "electron"
-    if "chromium" in lowered_path:
+    if "chromium" in lowered_path or "chrome" in lowered_name or "brave" in lowered_path:
         return "chromium"
 
     try:
@@ -103,11 +107,19 @@ def classify(executable: str) -> str | None:
         b"chromium",
         b"ozone-platform",
     )
+    mozilla_markers = (
+        b"moz_disable_content_sandbox",
+        b"moz_disable_gpu_sandbox",
+        b"moz_webrender",
+        b"xre_main",
+    )
 
     if any(marker in sample for marker in electron_markers):
         return "electron"
     if any(marker in sample for marker in chromium_markers):
         return "chromium"
+    if any(marker in sample for marker in mozilla_markers):
+        return "mozilla"
     return None
 
 def override_exec(text: str, family: str, original_exec: str) -> str:

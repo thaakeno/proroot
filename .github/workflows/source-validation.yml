@@ -75,6 +75,8 @@ jobs:
           bash -n android/app/src/main/assets/guest/kwin_wayland_wrapper
           bash -n android/app/src/main/assets/guest/start-system-services.sh
           bash -n android/app/src/main/assets/guest/launch-desktop-app.sh
+          bash -n android/app/src/main/assets/guest/launch-app-runtime.sh
+          bash -n android/app/src/main/assets/guest/launch-chromium-runtime.sh
           bash -n android/app/src/main/assets/guest/session-env.sh
           bash -n android/app/src/main/assets/guest/set-desktop-scale.sh
           python3 -m py_compile             android/app/src/main/assets/guest/host_dbus.py             android/app/src/main/assets/guest/host-upower-bridge.py             android/app/src/main/assets/guest/host-login1-bridge.py             android/app/src/main/assets/guest/set-desktop-scale.py             android/app/src/main/assets/guest/prepare-app-runtime.py             android/app/src/main/assets/guest/desktop-launcher-bridge.py
@@ -108,6 +110,8 @@ jobs:
           grep -q 'kbuildsycoca6 --noincremental' android/app/src/main/assets/guest/start-user-session.sh
           grep -q 'kinfocenter' android/app/src/main/kotlin/dev/thaakeno/proroot/install/RuntimeInstaller.kt
           grep -q 'Audio is process-global' android/app/src/main/cpp/patch-anland-lifecycle.cmake
+          grep -q -- '--disable-software-rasterizer' android/app/src/main/assets/guest/launch-app-runtime.sh
+          grep -q 'MOZ_DISABLE_GPU_SANDBOX=1' android/app/src/main/assets/guest/launch-app-runtime.sh
           if grep -q 'scheduleSurfaceRestart' android/app/src/main/kotlin/dev/thaakeno/proroot/display/LinuxSurfaceView.kt; then
             echo 'Destructive SurfaceView resize restart returned' >&2
             exit 1

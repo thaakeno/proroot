@@ -121,11 +121,11 @@ export PIPEWIRE_RUNTIME_DIR="$runtime"
 export PULSE_RUNTIME_PATH="$pulse_dir"
 export PULSE_SERVER="unix:$pulse_dir/native"
 
-# Prefer native Wayland for browser/Electron families globally. This is session
-# policy, not an Apps-tab per-application rewrite.
-export MOZ_ENABLE_WAYLAND=1
-export MOZ_FAKE_NO_SANDBOX=1
-export ELECTRON_OZONE_PLATFORM_HINT=wayland
+# Keep the session itself toolkit-neutral. Runtime-family launch policy is
+# applied by launch-app-runtime.sh so Chromium/Electron can use accelerated
+# Xwayland while native GTK/Qt/Mozilla applications remain on Wayland.
+unset MOZ_FAKE_NO_SANDBOX
+unset ELECTRON_OZONE_PLATFORM_HINT
 
 # Build capability-based desktop overrides once per session. This makes apps
 # started by Plasma and apps started from Android use the same compatibility
@@ -156,7 +156,7 @@ persist_env() {
         GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
         ANLAND ANLAND_SOCKET ANLAND_DRM_DEVICE ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
-        FD_FORCE_KGSL PROROOT_REFRESH_HZ         MOZ_ENABLE_WAYLAND MOZ_FAKE_NO_SANDBOX ELECTRON_OZONE_PLATFORM_HINT
+        FD_FORCE_KGSL PROROOT_REFRESH_HZ
     do
         persist_env "$name"
     done
