@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../core/models/runtime_snapshot.dart';
 import '../../core/state/runtime_controller.dart';
 import '../apps/apps_screen.dart';
 import '../desktop/desktop_screen.dart';
+import '../desktop/native_desktop_view.dart';
 import '../home/home_screen.dart';
 import '../install/install_screen.dart';
 import '../settings/settings_screen.dart';
@@ -32,6 +34,10 @@ class _ShellScreenState extends State<ShellScreen> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final snapshot = controller.snapshot;
+    final keepNativeDesktop = snapshot.running ||
+        snapshot.phase == RuntimePhase.starting ||
+        (snapshot.phase == RuntimePhase.stopping && snapshot.running);
     final pages = <Widget>[
       HomeScreen(
         controller: controller,
@@ -59,7 +65,24 @@ class _ShellScreenState extends State<ShellScreen> {
         body: SafeArea(
           top: true,
           bottom: false,
-          child: IndexedStack(index: _index, children: pages),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Keep the Android SurfaceView alive for the entire Linux session.
+              // Switching Flutter tabs must never tear down Anland's consumer.
+              if (keepNativeDesktop)
+                const Positioned.fill(child: NativeDesktopView()),
+              if (!_desktopSelected)
+                Positioned.fill(
+                  child: ColoredBox(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                  ),
+                ),
+              Positioned.fill(
+                child: IndexedStack(index: _index, children: pages),
+              ),
+            ],
+          ),
         ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _index,
