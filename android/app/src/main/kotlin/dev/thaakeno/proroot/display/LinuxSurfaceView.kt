@@ -3,6 +3,8 @@ package dev.thaakeno.proroot.display
 import android.content.Context
 import android.graphics.Color
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -24,7 +26,10 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     private val paths = RuntimePaths(context)
     private val callbackBridge = AnlandCallbackBridge(context)
     private val inputMethod = context.getSystemService(InputMethodManager::class.java)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
+    private var pendingSurfaceRestart: Runnable? = null
+    private var pendingPointerWake: Runnable? = null
     private var consumerStarted = false
     private var surfaceWidth = 0
     private var surfaceHeight = 0
@@ -69,18 +74,30 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
             height == surfaceHeight &&
             format == surfaceFormat
         ) {
+            cancelPendingSurfaceRestart()
             applyFrameRate(holder.surface, options.refreshRate)
             return
         }
 
-        stopConsumerForRuntime()
-        surfaceWidth = width
-        surfaceHeight = height
-        surfaceFormat = format
-        startConsumer(holder.surface, width, height)
+        if (!consumerStarted) {
+            surfaceWidth = width
+            surfaceHeight = height
+            surfaceFormat = format
+            startConsumerSafely(holder.surface, width, height)
+            return
+        }
+
+        // Flutter/IME animations can emit dozens of intermediate Surface sizes in
+        // a few seconds. Restarting Anland for every frame repeatedly tears down
+        // native render threads and was the last Android-process crash path seen
+        // in the device log. Keep rendering at the previous size and reconnect
+        // once the layout has been stable briefly.
+        scheduleSurfaceRestart(format, width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        cancelPendingSurfaceRestart()
+        cancelPointerWake()
         stopConsumerForRuntime()
         surfaceWidth = 0
         surfaceHeight = 0
@@ -97,16 +114,50 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
             return
         }
 
-        File(paths.logsDir, "anland-consumer.log").appendText(
-            "nativeStop failed: ${error.stackTraceToString()}\n",
-        )
+        logConsumerError("nativeStop failed", error)
     }
 
     fun dispose() {
+        cancelPendingSurfaceRestart()
+        cancelPointerWake()
         stopConsumerForRuntime()
         callbackBridge.dispose()
         DisplaySettings.removeListener(optionsListener)
         holder.removeCallback(this)
+    }
+
+    private fun scheduleSurfaceRestart(format: Int, width: Int, height: Int) {
+        cancelPendingSurfaceRestart()
+        val restart = Runnable {
+            pendingSurfaceRestart = null
+            val surface = holder.surface
+            if (!surface.isValid) return@Runnable
+
+            stopConsumerForRuntime()
+            if (consumerStarted) return@Runnable
+
+            surfaceWidth = width
+            surfaceHeight = height
+            surfaceFormat = format
+            startConsumerSafely(surface, width, height)
+        }
+        pendingSurfaceRestart = restart
+        mainHandler.postDelayed(restart, 220L)
+    }
+
+    private fun cancelPendingSurfaceRestart() {
+        pendingSurfaceRestart?.let(mainHandler::removeCallbacks)
+        pendingSurfaceRestart = null
+    }
+
+    private fun startConsumerSafely(surface: Surface, width: Int, height: Int) {
+        val error = runCatching {
+            startConsumer(surface, width, height)
+        }.exceptionOrNull()
+        if (error != null) {
+            consumerStarted = false
+            logConsumerError("nativeStart failed", error)
+        }
     }
 
     private fun startConsumer(surface: Surface, width: Int, height: Int) {
@@ -125,6 +176,40 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         pointerX = width / 2f
         pointerY = height / 2f
         Native.nativeSendMouseMotion(pointerX, pointerY, 0f, 0f)
+        schedulePointerWake()
+    }
+
+    private fun schedulePointerWake() {
+        cancelPointerWake()
+        val wake = Runnable {
+            pendingPointerWake = null
+            if (!consumerStarted) return@Runnable
+
+            // The first pointer packet can be sent before the Linux producer has
+            // connected. Send one harmless motion after the normal KWin connect
+            // window so the compositor switches from touch-only to cursor input.
+            runCatching {
+                Native.nativeSendMouseMotion(pointerX, pointerY, 0.5f, 0f)
+            }.onFailure { error ->
+                logConsumerError("pointer wake failed", error)
+            }
+        }
+        pendingPointerWake = wake
+        mainHandler.postDelayed(wake, 3_500L)
+    }
+
+    private fun cancelPointerWake() {
+        pendingPointerWake?.let(mainHandler::removeCallbacks)
+        pendingPointerWake = null
+    }
+
+    private fun logConsumerError(prefix: String, error: Throwable) {
+        runCatching {
+            paths.logsDir.mkdirs()
+            File(paths.logsDir, "anland-consumer.log").appendText(
+                "$prefix: ${error.stackTraceToString()}\n",
+            )
+        }
     }
 
     private fun applyFrameRate(surface: Surface, refreshRate: Int) {
