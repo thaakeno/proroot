@@ -134,7 +134,13 @@ class ProrootRunner(
                 "PROROOT_LOG_APPEND" to
                     File(paths.logsDir, "proroot-system-services.log").absolutePath,
             ),
-        ).start()
+        ).apply {
+            // KDE/Qt keeps the no-patch workaround, but the system-service
+            // bootstrap needs ProRoot's normal syscall patching. Without it,
+            // glibc/NSS lookups can escape the guest filesystem and even
+            // "id -un" cannot resolve the desktop uid from /etc/passwd.
+            environment().remove("PROROOT_NO_PATCH")
+        }.start()
 
     override fun startSession(shellCommand: String): Process =
         command(

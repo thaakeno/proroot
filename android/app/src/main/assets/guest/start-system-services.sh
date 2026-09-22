@@ -2,7 +2,12 @@
 set -euo pipefail
 
 uid="$(id -u)"
-user="$(id -un)"
+if user="$(id -un 2>/dev/null)"; then
+    :
+else
+    user="${USER:-linux}"
+    printf 'system-services: NSS username lookup unavailable for uid=%s; using USER=%s\n' "$uid" "$user" >&2
+fi
 printf 'system-services uid=%s user=%s\n' "$uid" "$user"
 if [[ "$uid" -eq 0 ]]; then
     echo "system services must use the desktop user identity" >&2
