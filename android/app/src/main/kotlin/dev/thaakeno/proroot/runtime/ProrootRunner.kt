@@ -134,13 +134,7 @@ class ProrootRunner(
                 "PROROOT_LOG_APPEND" to
                     File(paths.logsDir, "proroot-system-services.log").absolutePath,
             ),
-        ).apply {
-            // KDE/Qt keeps the no-patch workaround, but the system-service
-            // bootstrap needs ProRoot's normal syscall patching. Without it,
-            // glibc/NSS lookups can escape the guest filesystem and even
-            // "id -un" cannot resolve the desktop uid from /etc/passwd.
-            environment().remove("PROROOT_NO_PATCH")
-        }.start()
+        ).start()
 
     override fun startSession(shellCommand: String): Process =
         command(
@@ -153,12 +147,7 @@ class ProrootRunner(
                 "PROROOT_TRACE_KILL" to "1",
                 "PROROOT_TRACE_SIGSEGV_STACK" to "1",
             ),
-        ).apply {
-            // The bootstrap shell and dbus-run-session must keep normal ProRoot
-            // syscall patching so exec/NSS/path translation works. The guest
-            // session script enables PROROOT_NO_PATCH only for Qt/KDE children.
-            environment().remove("PROROOT_NO_PATCH")
-        }.start()
+        ).start()
 
     override fun startDetachedUser(shellCommand: String, logFile: File): Process {
         logFile.parentFile?.mkdirs()
@@ -201,18 +190,9 @@ class ProrootRunner(
             "PROROOT_LINKER_PATH" to linkerLib.absolutePath,
             "PROROOT_STUB_LOADER" to stubLoader.absolutePath,
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "LANG" to "C.UTF-8",
-            "LC_ALL" to "C.UTF-8",
+            "LANG" to "C.utf8",
+            "LC_ALL" to "C.utf8",
         )
-        // ProRoot v1.2.8's inline ARM64 SVC patcher is unsafe for some
-        // long-lived Qt/KDE desktop processes on this device. Keep ProRoot's
-        // linker/interposition/path-translation runtime, but disable binary
-        // rewriting for the unprivileged desktop side. Installer/fake-root
-        // commands keep the patcher enabled for raw-syscall compatibility.
-        if (!fakeRoot) {
-            env["PROROOT_NO_PATCH"] = "1"
-        }
-
         env.putAll(extra)
         return env
     }
