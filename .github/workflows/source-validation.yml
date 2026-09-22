@@ -102,6 +102,17 @@ jobs:
           bash android/app/src/main/assets/guest/normalize-staged-debs.sh "$tmp/staged"
           test "$(dpkg-deb -f "$tmp/staged/test.deb" Architecture)" = "arm64"
 
+      - name: Runtime regression guards
+        run: |
+          grep -q 'XDG_MENU_PREFIX=plasma-' android/app/src/main/assets/guest/start-desktop.sh
+          grep -q 'kbuildsycoca6 --noincremental' android/app/src/main/assets/guest/start-user-session.sh
+          grep -q 'kinfocenter' android/app/src/main/kotlin/dev/thaakeno/proroot/install/RuntimeInstaller.kt
+          grep -q 'Audio is process-global' android/app/src/main/cpp/anland-lifecycle.patch
+          if grep -q 'scheduleSurfaceRestart' android/app/src/main/kotlin/dev/thaakeno/proroot/display/LinuxSurfaceView.kt; then
+            echo 'Destructive SurfaceView resize restart returned' >&2
+            exit 1
+          fi
+
       - name: Compile Android and native sources
         working-directory: android
         run: |
