@@ -16,6 +16,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.anland.termux.KeyCodeMapper
 import com.anland.termux.Native
+import com.anland.termux.VirtualTouchpadBridge
 import dev.thaakeno.proroot.runtime.RuntimePaths
 import java.io.File
 import kotlin.math.abs
@@ -38,29 +39,13 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
     private var pointerX = 0f
     private var pointerY = 0f
-    private var pointerPrimed = false
     private var lastButtons = 0
 
-    private val touchpad = AnlandTouchpadController(
-        context,
-        object : AnlandTouchpadController.Output {
-            override fun movePointer(dx: Float, dy: Float) {
-                moveRelativePointer(dx, dy)
-            }
-
-            override fun sendButton(button: Int, pressed: Boolean) {
-                if (!consumerStarted) return
-                primePointerForTrackpad()
-                Native.nativeSendMouseButton(button, pressed)
-            }
-
-            override fun sendScroll(axis: Int, value: Float) {
-                if (!consumerStarted) return
-                primePointerForTrackpad()
-                Native.nativeSendMouseScroll(axis, value)
-            }
-        },
-    )
+    // Use Anland's real upstream VirtualTouchpad state machine. The bridge only
+    // adapts package visibility/lifecycle; gesture semantics stay upstream.
+    private val touchpad = VirtualTouchpadBridge(context).apply {
+        setAccelStrength(1.0f)
+    }
 
     private val optionsListener: (DisplayOptions) -> Unit = { next ->
         val previousMode = options.inputMode
@@ -72,9 +57,8 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         }
 
         if (previousMode != next.inputMode) {
-            touchpad.cancel()
+            touchpad.reset()
             syncButtons(0)
-            pointerPrimed = false
             if (next.inputMode == InputMode.DIRECT) {
                 runCatching { releasePointerCapture() }
             }
@@ -120,6 +104,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         super.onSizeChanged(w, h, oldw, oldh)
         layoutWidth = w
         layoutHeight = h
+        touchpad.onSurfaceChanged()
 
         if (runtimeStopping || !consumerStarted || w <= 0 || h <= 0) return
 
@@ -155,7 +140,6 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
         if (error == null) {
             consumerStarted = false
-            pointerPrimed = false
         } else {
             logConsumerError("nativeStop failed", error)
         }
@@ -237,8 +221,8 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         consumerHeight = height
         pointerX = width / 2f
         pointerY = height / 2f
-        pointerPrimed = false
         lastButtons = 0
+        touchpad.onSurfaceChanged()
     }
 
     private fun logConsumerError(prefix: String, error: Throwable) {
@@ -328,10 +312,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
 
         return when (options.inputMode) {
             InputMode.DIRECT -> handleDirectTouch(event)
-            InputMode.TRACKPAD -> {
-                primePointerForTrackpad()
-                touchpad.onTouch(event)
-            }
+            InputMode.TRACKPAD -> touchpad.onTouch(event)
         }
     }
 
@@ -408,33 +389,6 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         return true
     }
 
-    private fun primePointerForTrackpad() {
-        if (pointerPrimed || !consumerStarted || options.inputMode != InputMode.TRACKPAD) {
-            return
-        }
-
-        val targetWidth = consumerWidth.takeIf { it > 0 } ?: width
-        val targetHeight = consumerHeight.takeIf { it > 0 } ?: height
-        pointerX = targetWidth / 2f
-        pointerY = targetHeight / 2f
-
-        // Do this only after the user actually interacts in trackpad mode. The
-        // old startup "pointer wake" made a cursor appear even in Direct mode.
-        Native.nativeSendMouseMotion(pointerX, pointerY, 0.01f, 0f)
-        pointerPrimed = true
-    }
-
-    private fun moveRelativePointer(dx: Float, dy: Float) {
-        if (!consumerStarted) return
-        primePointerForTrackpad()
-
-        val maxX = (consumerWidth.takeIf { it > 0 } ?: width).toFloat()
-        val maxY = (consumerHeight.takeIf { it > 0 } ?: height).toFloat()
-        pointerX = (pointerX + dx).coerceIn(0f, maxX)
-        pointerY = (pointerY + dy).coerceIn(0f, maxY)
-        Native.nativeSendMouseMotion(pointerX, pointerY, dx, dy)
-    }
-
     private fun handleMouse(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_SCROLL) {
             val vertical = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
@@ -476,7 +430,6 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
             Native.nativeSendMouseMotion(pointerX, pointerY, dx, dy)
         }
 
-        pointerPrimed = true
         syncButtons(effectiveButtonState(event))
         return true
     }
