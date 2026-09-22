@@ -37,7 +37,7 @@ class _ShellScreenState extends State<ShellScreen> {
     final snapshot = controller.snapshot;
     final keepNativeDesktop = snapshot.running ||
         snapshot.phase == RuntimePhase.starting ||
-        (snapshot.phase == RuntimePhase.stopping && snapshot.running);
+        snapshot.phase == RuntimePhase.stopping;
     final pages = <Widget>[
       HomeScreen(
         controller: controller,
