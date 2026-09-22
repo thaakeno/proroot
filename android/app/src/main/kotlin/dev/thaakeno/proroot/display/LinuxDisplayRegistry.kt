@@ -1,6 +1,8 @@
 package dev.thaakeno.proroot.display
 
 import java.lang.ref.WeakReference
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 object LinuxDisplayRegistry {
     @Volatile
@@ -15,6 +17,20 @@ object LinuxDisplayRegistry {
             active?.clear()
             active = null
         }
+    }
+
+    fun stopConsumerAndAwait(timeoutMs: Long = 5_000): Boolean {
+        val view = active?.get() ?: return true
+        val stopped = CountDownLatch(1)
+        val posted = view.post {
+            try {
+                view.prepareForRuntimeStop()
+            } finally {
+                stopped.countDown()
+            }
+        }
+        if (!posted) return false
+        return stopped.await(timeoutMs, TimeUnit.MILLISECONDS)
     }
 
     fun awaitDetached(timeoutMs: Long = 5_000): Boolean {
