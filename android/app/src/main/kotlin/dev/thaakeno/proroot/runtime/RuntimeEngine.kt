@@ -73,6 +73,19 @@ class RuntimeEngine private constructor(private val context: Context) {
             installer.recoverInterruptedActivation()
         }.exceptionOrNull()
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
+
+        // An activated, verified runtime wins over stale installer bookkeeping.
+        // A process kill between activation and journal.success() used to leave
+        // .installing/rootfs.staging behind forever even though Linux was healthy.
+        if (installed && File(paths.rootfs, ".proroot-runtime-ready").isFile) {
+            paths.installInProgress.delete()
+            val stagingResumeMarker =
+                File(paths.rootfsStaging, ".proroot-staging-resumable")
+            if (paths.rootfsStaging.isDirectory && !stagingResumeMarker.isFile) {
+                paths.rootfsStaging.deleteRecursively()
+            }
+        }
+
         val lastInstallFailure = installer.lastFailure()
         val interruptedInstall = installer.wasInterrupted()
         val previousRuntimeCrash = File(paths.logsDir, "proroot-crash.log")
