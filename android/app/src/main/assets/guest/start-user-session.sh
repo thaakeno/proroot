@@ -6,6 +6,48 @@ log_dir="$runtime/anland-logs"
 pipewire_config="$runtime/anland-pipewire-config"
 pulse_dir="${PULSE_RUNTIME_PATH:-$runtime/anland-pulse}"
 
+# KDE ships both org.kde.plasma.core and org.kde.ksvg with a QML plugin named
+# libcorebindingsplugin.so. Normal glibc can load both absolute paths at once,
+# but ProRoot's clean-room linker can alias same-basename plugin loads. That
+# leaves KSvg's C++ types unregistered even though the package and libraries are
+# present, producing a black Plasma shell ("KSvg.SvgItem is not a type").
+# Give the two plugins unique filenames and make their qmldir files point at
+# those copies. This is idempotent and is reapplied after package upgrades.
+prepare_unique_qml_plugin() {
+    local module="$1"
+    local unique="$2"
+    local qml_root="${QML_IMPORT_PATH%%:*}"
+
+    if [[ -z "$qml_root" || ! -d "$qml_root" ]]; then
+        qml_root=/usr/lib/aarch64-linux-gnu/qt6/qml
+    fi
+
+    local module_dir="$qml_root/$module"
+    local original="$module_dir/libcorebindingsplugin.so"
+    local renamed="$module_dir/lib${unique}.so"
+    local qmldir="$module_dir/qmldir"
+
+    [[ -f "$original" && -f "$qmldir" ]] || return 0
+
+    cp -f "$original" "$renamed"
+    sed -i \
+        -e "s/^linktarget corebindingsplugin$/linktarget $unique/" \
+        -e "s/^optional plugin corebindingsplugin$/optional plugin $unique/" \
+        -e "s/^plugin corebindingsplugin$/plugin $unique/" \
+        -e '/^prefer /d' \
+        "$qmldir"
+
+    if ! grep -Eq "^(optional )?plugin $unique$" "$qmldir"; then
+        echo "Failed to retarget QML plugin for $module" >&2
+        return 1
+    fi
+
+    echo "QML plugin isolated: $module -> lib${unique}.so"
+}
+
+prepare_unique_qml_plugin org/kde/plasma/core proroot_plasma_corebindingsplugin
+prepare_unique_qml_plugin org/kde/ksvg proroot_ksvg_corebindingsplugin
+
 mkdir -p "$log_dir" "$pulse_dir" \
     "$pipewire_config/pipewire/pipewire.conf.d" \
     "$pipewire_config/wireplumber/wireplumber.conf.d"
