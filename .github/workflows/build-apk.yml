@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-forensics-about-v11
+# rebuild marker: proroot-v128-forensics-about-v12
 
 on:
   push:
