@@ -215,10 +215,11 @@ class RuntimeEngine private constructor(private val context: Context) {
                     return@withLock
                 }
 
+                val consumerStopped = stopDisplayConsumerBeforeRuntime()
                 session.stop()
                 systemServices.stop()
                 publishStartFailure(failure)
-                stopDisplayTransportAfterViewDetach()
+                stopDisplayTransportAfterConsumerStop(consumerStopped)
                 stopForegroundHost()
             }
         }
@@ -245,16 +246,18 @@ class RuntimeEngine private constructor(private val context: Context) {
                 scope.launch {
                     mutex.withLock {
                         if (RuntimeEvents.latest.phase != RuntimePhase.running) return@withLock
-                        systemServices.stop()
+                        val consumerStopped = stopDisplayConsumerBeforeRuntime()
                         RuntimeEvents.publish(
                             RuntimeStatus(
                                 phase = RuntimePhase.failed,
                                 message = "Linux desktop stopped",
                                 detail = "Desktop process exited with code $exitCode. See diagnostics for full logs.",
                                 installed = true,
+                                running = false,
                             ),
                         )
-                        stopDisplayTransportAfterViewDetach()
+                        systemServices.stop()
+                        stopDisplayTransportAfterConsumerStop(consumerStopped)
                         stopForegroundHost()
                     }
                 }
@@ -362,9 +365,18 @@ class RuntimeEngine private constructor(private val context: Context) {
                         running = true,
                     ),
                 )
+                val consumerStopped = stopDisplayConsumerBeforeRuntime()
+                RuntimeEvents.publish(
+                    RuntimeStatus(
+                        phase = RuntimePhase.stopping,
+                        message = "Stopping Linux",
+                        installed = paths.installMarker.isFile,
+                        running = false,
+                    ),
+                )
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransportAfterViewDetach()
+                stopDisplayTransportAfterConsumerStop(consumerStopped)
                 RuntimeEvents.publish(
                     RuntimeStatus(
                         phase = if (paths.installMarker.isFile) RuntimePhase.ready else RuntimePhase.missing,
@@ -388,9 +400,18 @@ class RuntimeEngine private constructor(private val context: Context) {
                         running = session.isRunning(),
                     ),
                 )
+                val consumerStopped = stopDisplayConsumerBeforeRuntime()
+                RuntimeEvents.publish(
+                    RuntimeStatus(
+                        phase = RuntimePhase.stopping,
+                        message = "Resetting Linux",
+                        installed = paths.installMarker.isFile,
+                        running = false,
+                    ),
+                )
                 session.stop()
                 systemServices.stop()
-                stopDisplayTransportAfterViewDetach()
+                stopDisplayTransportAfterConsumerStop(consumerStopped)
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()
                 paths.rootfsPrevious.deleteRecursively()
@@ -438,13 +459,23 @@ class RuntimeEngine private constructor(private val context: Context) {
     fun diagnostics(): Map<String, Any?> =
         diagnosticsCollector.collect(status())
 
-    private fun stopDisplayTransportAfterViewDetach() {
-        val detached = LinuxDisplayRegistry.awaitDetached()
-        if (detached) {
+    private fun stopDisplayConsumerBeforeRuntime(): Boolean {
+        val stopped = LinuxDisplayRegistry.stopConsumerAndAwait()
+        if (!stopped) {
+            File(paths.logsDir, "anland-daemon.log").appendText(
+                "display consumer did not stop within 5s; deferring daemon teardown to avoid JNI race\n",
+            )
+        }
+        return stopped
+    }
+
+    private fun stopDisplayTransportAfterConsumerStop(consumerStopped: Boolean) {
+        val detached = LinuxDisplayRegistry.awaitDetached(timeoutMs = 2_500)
+        if (consumerStopped || detached) {
             daemon.stop()
         } else {
             File(paths.logsDir, "anland-daemon.log").appendText(
-                "display consumer did not detach within 5s; keeping daemon alive to avoid JNI teardown race\n",
+                "display consumer is still attached after runtime stop; keeping daemon alive to avoid JNI teardown race\n",
             )
         }
     }
