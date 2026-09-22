@@ -76,6 +76,17 @@ class RuntimePaths(context: Context) {
         runCatching { Os.chmod(shmDir.absolutePath, 0x3FF) }
     }
 
+    fun cleanupStaleInstallStateIfVerified() {
+        val ready = File(rootfs, ".proroot-runtime-ready")
+        if (!installMarker.isFile || !rootfs.isDirectory || !ready.isFile) return
+
+        installInProgress.delete()
+        val resumable = File(rootfsStaging, ".proroot-staging-resumable")
+        if (rootfsStaging.isDirectory && !resumable.isFile) {
+            rootfsStaging.deleteRecursively()
+        }
+    }
+
     fun resetTransientState() {
         anlandSocket.delete()
         tmpDir.deleteRecursively()
