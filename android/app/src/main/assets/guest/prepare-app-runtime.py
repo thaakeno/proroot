@@ -12,7 +12,7 @@ import os
 import re
 import shlex
 import shutil
-import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", "/home/linux"))
@@ -24,6 +24,7 @@ SEARCH_DIRS = (
 )
 
 FIELD_CODE = re.compile(r"^%[fFuUdDnNickvm]$")
+STATIC_SCAN_BYTES = 8 * 1024 * 1024
 
 
 def main_exec(text: str) -> str | None:
@@ -62,45 +63,52 @@ def executable_from_exec(exec_line: str) -> str | None:
     return shutil.which(command)
 
 
+@lru_cache(maxsize=None)
 def classify(executable: str) -> str | None:
+    """Classify a launcher without executing it.
+
+    Startup happens before the Wayland compositor exists, so probing arbitrary
+    desktop executables with --version can launch Qt/GTK programs too early and
+    crash the guest runtime. Read-only inspection keeps this setup side-effect
+    free while still detecting Chromium/Electron launchers and binaries.
+    """
     path = Path(executable)
     try:
         resolved = path.resolve(strict=True)
     except OSError:
         return None
 
-    sample = b""
+    lowered_path = str(resolved).lower()
+    if "electron" in resolved.name.lower():
+        return "electron"
+    if "chromium" in lowered_path:
+        return "chromium"
+
     try:
         with resolved.open("rb") as source:
-            sample = source.read(2 * 1024 * 1024).lower()
+            sample = source.read(STATIC_SCAN_BYTES).lower()
     except OSError:
-        pass
+        return None
 
-    if b"electron_run_as_node" in sample or b"electron_no_attach_console" in sample:
+    electron_markers = (
+        b"electron_run_as_node",
+        b"electron_no_attach_console",
+        b"resources/app.asar",
+        b"electron/js2c",
+    )
+    chromium_markers = (
+        b"chrome-sandbox",
+        b"chrome_crashpad_handler",
+        b"chrome_wrapper",
+        b"chromium",
+        b"ozone-platform",
+    )
+
+    if any(marker in sample for marker in electron_markers):
         return "electron"
-    if b"chrome-sandbox" in sample or b"chromium" in sample:
+    if any(marker in sample for marker in chromium_markers):
         return "chromium"
-
-    try:
-        completed = subprocess.run(
-            [str(resolved), "--version"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=2,
-            check=False,
-            text=True,
-        )
-        version = completed.stdout.lower()
-    except (OSError, subprocess.TimeoutExpired):
-        version = ""
-
-    if "chromium" in version:
-        return "chromium"
-    if "electron" in version:
-        return "electron"
     return None
-
 
 def override_exec(text: str, family: str, original_exec: str) -> str:
     in_desktop = False

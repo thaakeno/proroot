@@ -131,16 +131,6 @@ export ELECTRON_OZONE_PLATFORM_HINT=wayland
 python3 /usr/local/lib/proroot/prepare-app-runtime.py     >"$log_dir/app-runtime-compat.log" 2>&1 || true
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
-env XDG_CONFIG_HOME="$pipewire_config" pipewire >"$log_dir/pipewire.log" 2>&1 &
-pipewire_pid=$!
-if wait_for_socket "$runtime/pipewire-0"; then
-    env XDG_CONFIG_HOME="$pipewire_config" wireplumber >"$log_dir/wireplumber.log" 2>&1 &
-    wireplumber_pid=$!
-    env XDG_CONFIG_HOME="$pipewire_config" pipewire-pulse >"$log_dir/pipewire-pulse.log" 2>&1 &
-    pulse_pid=$!
-    wait_for_socket "$pulse_dir/native" 50 || true
-fi
-
 env_file="$runtime/proroot-session.env"
 persist_env() {
     local name="$1"
@@ -217,6 +207,19 @@ session_pid=$!
 if ! wait_for_plasma 300; then
     echo "KWin/Plasma shell did not become healthy" >&2
     exit 70
+fi
+
+# Start desktop media services only after KWin has published Wayland and
+# plasmashell owns its D-Bus name. Starting them earlier can D-Bus-activate the
+# KDE portal before a compositor exists, producing repeated wl_display failures.
+env XDG_CONFIG_HOME="$pipewire_config" pipewire >"$log_dir/pipewire.log" 2>&1 &
+pipewire_pid=$!
+if wait_for_socket "$runtime/pipewire-0"; then
+    env XDG_CONFIG_HOME="$pipewire_config" wireplumber >"$log_dir/wireplumber.log" 2>&1 &
+    wireplumber_pid=$!
+    env XDG_CONFIG_HOME="$pipewire_config" pipewire-pulse >"$log_dir/pipewire-pulse.log" 2>&1 &
+    pulse_pid=$!
+    wait_for_socket "$pulse_dir/native" 50 || true
 fi
 
 # Launch Android-requested apps from this exact KDE session instead of spawning

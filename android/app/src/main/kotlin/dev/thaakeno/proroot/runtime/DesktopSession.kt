@@ -51,7 +51,7 @@ class DesktopSession(
         }
 
         onStage("Validating KDE desktop")
-        waitForDesktopReady(started)
+        waitForDesktopReady(started, onStage)
         if (safeScale != 1.0) {
             onStage("Applying desktop settings")
             val result = applyScale(safeScale)
@@ -72,11 +72,12 @@ class DesktopSession(
         )
     }
 
-    private fun waitForDesktopReady(started: Process) {
+    private fun waitForDesktopReady(started: Process, onStage: (String) -> Unit) {
         val usersDir = File(paths.rootfs, "run/user")
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(40)
         var stableSince = 0L
         var nextHealthProbe = 0L
+        var nextProgressPublish = 0L
         var lastHealth = CommandResult(1, "Desktop health probe has not run yet")
 
         while (System.nanoTime() < deadline) {
@@ -96,6 +97,10 @@ class DesktopSession(
             } == true
 
             val now = System.nanoTime()
+            if (now >= nextProgressPublish) {
+                onStage("Validating KDE desktop")
+                nextProgressPublish = now + TimeUnit.MILLISECONDS.toNanos(500)
+            }
             if (sessionPublished && now >= nextHealthProbe) {
                 lastHealth = health()
                 nextHealthProbe = now + TimeUnit.MILLISECONDS.toNanos(400)

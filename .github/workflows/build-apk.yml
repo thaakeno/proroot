@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-final-runtime-input-apps-device-v13
+# rebuild marker: proroot-v128-safe-kde-startup-v14
 
 on:
   push:

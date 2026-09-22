@@ -78,11 +78,6 @@ class RuntimeEngine private constructor(private val context: Context) {
 
         val lastInstallFailure = installer.lastFailure()
         val interruptedInstall = installer.wasInterrupted()
-        val previousRuntimeCrash = File(paths.logsDir, "proroot-crash.log")
-            .takeIf { it.isFile }
-            ?.readText()
-            ?.takeIf { it.contains("[proroot] SIGSEGV") || it.contains("[proroot] SIGABRT") }
-
         RuntimeEvents.publish(
             when {
                 recoveryFailure != null -> RuntimeStatus(
@@ -90,21 +85,6 @@ class RuntimeEngine private constructor(private val context: Context) {
                     message = "Linux environment recovery failed",
                     detail = recoveryFailure.stackTraceToString().takeLast(16_000),
                     installed = installed,
-                    running = false,
-                )
-                installed && previousRuntimeCrash != null -> RuntimeStatus(
-                    phase = RuntimePhase.failed,
-                    progress = 0.0,
-                    message = "Previous Linux session crashed",
-                    detail = previousRuntimeCrash
-                        .lineSequence()
-                        .lastOrNull { line ->
-                            line.contains("[proroot] SIGSEGV") ||
-                                line.contains("[proroot] SIGABRT") ||
-                                line.contains("[proroot] SIGBUS")
-                        }
-                        ?: previousRuntimeCrash.takeLast(2_000),
-                    installed = true,
                     running = false,
                 )
                 installed -> RuntimeStatus(
