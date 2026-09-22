@@ -24,6 +24,14 @@ class DeviceInfoCollector(
             ?.let { runCatching(it::readText).getOrNull() }
             .orEmpty()
         val kgslAvailable = File("/dev/kgsl-3d0").exists()
+        val desktopLog = File(paths.logsDir, "desktop-session.log")
+            .takeIf { it.isFile }
+            ?.let { runCatching(it::readText).getOrNull() }
+            .orEmpty()
+        val plasmaSoftwareRenderer = desktopLog.contains(
+            "forcing Qt Quick to use the software renderer",
+            ignoreCase = true,
+        )
 
         val gpuName = summaryValue(vulkan, "deviceName")
             ?: if (kgslAvailable) "Qualcomm Adreno via KGSL" else "Not detected"
@@ -59,11 +67,19 @@ class DeviceInfoCollector(
                 "Driver" to gpuDriver,
                 "Vulkan API" to gpuApi,
                 "Android device" to if (kgslAvailable) "/dev/kgsl-3d0" else "Unavailable",
-                "Linux graphics path" to if (kgslAvailable) {
+                "Application GPU path" to if (kgslAvailable) {
                     "Hardware accelerated KGSL · Freedreno/Turnip"
                 } else {
                     "KGSL unavailable"
                 },
+                "Plasma Qt Quick" to if (plasmaSoftwareRenderer) {
+                    "Software renderer · Anland PRoot has no DRM render node"
+                } else if (kgslAvailable) {
+                    "No software fallback recorded in the current session"
+                } else {
+                    "Software / unverified"
+                },
+                "DRM render node" to "Unavailable in PRoot · Anland uses surfaceless EGL",
             ).filterValues { it != null && it.toString().isNotBlank() },
             "Memory" to linkedMapOf(
                 "Total RAM" to formatBytes(memory.totalMem),
