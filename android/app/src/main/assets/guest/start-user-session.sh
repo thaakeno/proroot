@@ -155,6 +155,13 @@ chmod 0600 "$env_file"
 xdg-user-dirs-update >/dev/null 2>&1 || true
 kwriteconfig6 --file startkderc --group General --key systemdBoot false >/dev/null 2>&1 || true
 
+# This is a phone-hosted compositor with a software Qt Quick path. Avoid desktop
+# effects/indexers that burn CPU/GPU for almost no value on a 1200px mobile view.
+kwriteconfig6 --file baloofilerc --group "Basic Settings" --key Indexing-Enabled false >/dev/null 2>&1 || true
+kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled false >/dev/null 2>&1 || true
+kwriteconfig6 --file kwinrc --group Plugins --key contrastEnabled false >/dev/null 2>&1 || true
+kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0.65 >/dev/null 2>&1 || true
+
 /usr/local/lib/proroot/check-qml-runtime.sh --files-only
 
 plasma_ready() {
