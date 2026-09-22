@@ -27,7 +27,7 @@ class RuntimeInstaller(
         private const val STAGING_RESUME_MARKER = ".proroot-staging-resumable"
         private const val BASE_PROVISIONED_MARKER = ".proroot-base-provisioned"
         private const val GRAPHICS_INSTALLED_MARKER = ".proroot-graphics-installed"
-        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v5"
+        private const val RUNTIME_MAINTENANCE_MARKER = ".proroot-runtime-maintenance-v6"
         private const val LINK_TARGETS_FIXED_MARKER = ".proroot-link-targets-v1"
         private const val MIN_HEALTHY_DPKG_PACKAGES = 150
     }
@@ -413,7 +413,7 @@ class RuntimeInstaller(
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                     plasma-desktop plasma-workspace plasma-desktoptheme libplasma6 \
                     qml6-module-org-kde-plasma-plasma5support qml6-module-org-kde-ksvg \
-                    kscreen kde-config-screenlocker plasma-pa powerdevil \
+                    qmlscene-qt6 kscreen kde-config-screenlocker plasma-pa powerdevil \
                     xkb-data x11-xkb-utils libxcb-cursor0
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall --no-install-recommends \
                     plasma-desktoptheme qml6-module-org-kde-ksvg \
@@ -426,6 +426,7 @@ class RuntimeInstaller(
             timeoutSeconds = 120,
             command = """
                 set -e
+                test -x /usr/bin/qmlscene6
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/qmldir
                 test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/libcorebindingsplugin.so
                 test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/qmldir

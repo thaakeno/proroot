@@ -1,5 +1,5 @@
 name: Build installable APK
-# rebuild marker: stable-wayland-surface-v7
+# rebuild marker: stable-proroot-qml-startup-v8
 
 on:
   push:

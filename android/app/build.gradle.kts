@@ -95,13 +95,13 @@ dependencies {
 
 data class RuntimeLibrary(val name: String, val sha256: String, val assetId: Long)
 
-val prorootVersion = "v1.2.8"
+val prorootVersion = "v1.2.7.1"
 val prorootLibraries = listOf(
-    RuntimeLibrary("libproroot.so", "a4e74d75b66cdc02b080adfe863dbf9951c3b30610d77beddc95488d5fe5de01", 449758014L),
-    RuntimeLibrary("libproroot-runtime.so", "8c47a0a7db32d84c179ebb5bf3640f655a3181860ece5886ae44d92858730c34", 449758016L),
-    RuntimeLibrary("libproroot-bridge.so", "1c5bc9537a270e8bf8b1c70222813f57b60b828bfb5503ddf8fe37685092de2f", 449758015L),
-    RuntimeLibrary("libproroot-linker.so", "51a0ec5bfed00e572a0de09e22d9057e2befc386b78e426613d3e0ab03f4ecee", 449758017L),
-    RuntimeLibrary("libproroot-stub-loader.so", "06c6624db3bdc45b9ced151cd781df439a37b47731d244b93e9d6a58cd48cde0", 449758013L),
+    RuntimeLibrary("libproroot.so", "018132fff13bcbc8871d25da6b695cad2b583a1f143236de7cbd9aa7c646770b", 428610458L),
+    RuntimeLibrary("libproroot-runtime.so", "af1846ef0648f2488a069d9b78a9448f7fa662e6249130577fe2f2d6ebcd32f3", 428610460L),
+    RuntimeLibrary("libproroot-bridge.so", "1c5bc9537a270e8bf8b1c70222813f57b60b828bfb5503ddf8fe37685092de2f", 428610461L),
+    RuntimeLibrary("libproroot-linker.so", "c8bd8c42b3eaf58e0635a97902b4808bfd32c57a47f33861aca5a8d42da662b7", 428610457L),
+    RuntimeLibrary("libproroot-stub-loader.so", "ef25133f0250c5353f1eb77770e91062dd3fe2f66a3c1288e47051bded8e9341", 428610459L),
 )
 
 fun sha256(file: File): String {

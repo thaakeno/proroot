@@ -35,6 +35,8 @@ export XDG_CURRENT_DESKTOP=KDE
 export XDG_SESSION_DESKTOP=KDE
 export XDG_SESSION_TYPE=wayland
 export QT_QPA_PLATFORM=wayland
+export QML_IMPORT_PATH=/usr/lib/aarch64-linux-gnu/qt6/qml
+export QML2_IMPORT_PATH=/usr/lib/aarch64-linux-gnu/qt6/qml
 
 export GDK_BACKEND=wayland
 export SDL_VIDEODRIVER=wayland

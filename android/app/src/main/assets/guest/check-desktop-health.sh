@@ -4,7 +4,7 @@ set -euo pipefail
 . /usr/local/lib/proroot/session-env.sh
 load_proroot_session_env
 
-qml_root="${QML_IMPORT_PATH%%:*}"
+qml_root=/usr/lib/aarch64-linux-gnu/qt6/qml
 test -d "$qml_root"
 test -f "$qml_root/org/kde/plasma/core/qmldir"
 test -f "$qml_root/org/kde/ksvg/qmldir"

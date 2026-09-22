@@ -98,7 +98,7 @@ persist_env() {
         XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
         DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS \
         PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH PULSE_SERVER \
-        QT_QPA_PLATFORM QT_SCALE_FACTOR \
+        QT_QPA_PLATFORM QML_IMPORT_PATH QML2_IMPORT_PATH QT_SCALE_FACTOR \
         GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
         ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
@@ -112,16 +112,7 @@ chmod 0600 "$env_file"
 xdg-user-dirs-update >/dev/null 2>&1 || true
 kwriteconfig6 --file startkderc --group General --key systemdBoot false >/dev/null 2>&1 || true
 
-qml_root=/usr/lib/aarch64-linux-gnu/qt6/qml
-test -f "$qml_root/org/kde/plasma/core/qmldir"
-test -r "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so"
-test -f "$qml_root/org/kde/ksvg/qmldir"
-test -r "$qml_root/org/kde/ksvg/libcorebindingsplugin.so"
-if ldd "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so" | grep -q 'not found'; then
-    echo "Plasma core QML plugin has unresolved shared libraries" >&2
-    ldd "$qml_root/org/kde/plasma/core/libcorebindingsplugin.so" >&2 || true
-    exit 69
-fi
+/usr/local/lib/proroot/check-qml-runtime.sh --files-only
 
 plasma_ready() {
     pgrep -x kwin_wayland >/dev/null 2>&1 || return 1

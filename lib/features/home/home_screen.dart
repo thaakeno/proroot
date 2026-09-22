@@ -47,6 +47,8 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
     final installing = _installing(snapshot);
+    final transitioning = snapshot.phase == RuntimePhase.starting ||
+        snapshot.phase == RuntimePhase.stopping;
     final scheme = Theme.of(context).colorScheme;
 
     return CustomScrollView(
@@ -129,6 +131,24 @@ class HomeScreen extends StatelessWidget {
                         Text(
                           'Setup keeps running if you leave this screen.',
                           style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ] else if (transitioning) ...[
+                        const SizedBox(height: 22),
+                        _StartupProgress(snapshot: snapshot),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: snapshot.phase == RuntimePhase.starting
+                                ? onOpenDesktop
+                                : null,
+                            icon: const Icon(Icons.desktop_windows_rounded),
+                            label: Text(
+                              snapshot.phase == RuntimePhase.starting
+                                  ? 'View startup'
+                                  : 'Stopping Linux',
+                            ),
+                          ),
                         ),
                       ] else if (snapshot.phase == RuntimePhase.failed) ...[
                         const SizedBox(height: 20),
@@ -277,6 +297,75 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _StartupProgress extends StatelessWidget {
+  const _StartupProgress({required this.snapshot});
+
+  final RuntimeSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = snapshot.progress.clamp(0.0, 1.0);
+    final percent = (progress * 100).round();
+    final details = snapshot.stageDetail?.trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                snapshot.phase == RuntimePhase.stopping
+                    ? 'Stopping Linux'
+                    : snapshot.message,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            if (snapshot.phase == RuntimePhase.starting)
+              Text(
+                '$percent%',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        LinearProgressIndicator(
+          value: snapshot.phase == RuntimePhase.starting && progress > 0
+              ? progress
+              : null,
+          minHeight: 9,
+          borderRadius: BorderRadius.circular(99),
+        ),
+        if (details != null && details.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Text(
+              details,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    height: 1.45,
+                  ),
+            ),
+          ),
+        ],
+        if (snapshot.elapsedSeconds > 0) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Elapsed ${snapshot.elapsedSeconds}s',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
       ],
     );
   }
@@ -442,6 +531,18 @@ class _StatusPill extends StatelessWidget {
           scheme.secondaryContainer,
           scheme.onSecondaryContainer,
         ),
+      RuntimePhase.starting => (
+          'Starting',
+          Icons.play_circle_outline_rounded,
+          scheme.secondaryContainer,
+          scheme.onSecondaryContainer,
+        ),
+      RuntimePhase.stopping => (
+          'Stopping',
+          Icons.stop_circle_outlined,
+          scheme.secondaryContainer,
+          scheme.onSecondaryContainer,
+        ),
       RuntimePhase.failed => (
           'Failed',
           Icons.error_outline_rounded,
@@ -538,7 +639,9 @@ class _AppGrid extends StatelessWidget {
         return Card(
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: () async {
+            onTap: controller.busy
+                ? null
+                : () async {
               onOpenDesktop();
               try {
                 await controller.launchApp(item.$3);

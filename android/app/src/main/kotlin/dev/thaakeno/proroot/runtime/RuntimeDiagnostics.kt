@@ -102,16 +102,9 @@ class RuntimeDiagnostics(
                     timeoutSeconds = 8,
                 ),
                 "plasmaQmlRuntime" to probe(
-                    """
-                    set -e
-                    test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/qmldir
-                    test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/libcorebindingsplugin.so
-                    test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/qmldir
-                    test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/libcorebindingsplugin.so
-                    dpkg-query -W plasma-desktoptheme qml6-module-org-kde-ksvg
-                    """.trimIndent(),
+                    "/usr/local/lib/proroot/check-qml-runtime.sh",
                     fakeRoot = false,
-                    timeoutSeconds = 8,
+                    timeoutSeconds = 15,
                 ),
                 "desktopApplications" to probe(
                     """

@@ -51,7 +51,7 @@ class DesktopProvisioner(
                     xdg-desktop-portal xdg-desktop-portal-kde
                     kde-plasma-desktop plasma-desktop plasma-workspace plasma-desktoptheme
                     libplasma6 qml6-module-org-kde-plasma-plasma5support qml6-module-org-kde-ksvg
-                    plasma-discover systemsettings libkscreen-bin kscreen
+                    qmlscene-qt6 plasma-discover systemsettings libkscreen-bin kscreen
                     kde-config-screenlocker plasma-pa powerdevil
                     breeze breeze-icon-theme kde-config-gtk-style kio-extras
                     konsole dolphin kate ark okular kde-spectacle gwenview kcalc
@@ -199,6 +199,7 @@ class DesktopProvisioner(
             set -e
             test "$(id -u)" = "$desktopUid"
             test -x /usr/bin/startplasma-wayland
+            test -x /usr/bin/qmlscene6
             test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/qmldir
             test -f /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksvg/qmldir
             test -r /usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/plasma/core/libcorebindingsplugin.so

@@ -51,6 +51,22 @@ class RuntimeEngine private constructor(private val context: Context) {
     @Volatile private var refreshRate = 120
     @Volatile private var scale = 1.0
 
+    private val startupStageOrder = listOf(
+        "Preparing Linux runtime",
+        "Repairing package links",
+        "Checking package database",
+        "Repairing interrupted packages",
+        "Refreshing Debian package metadata",
+        "Installing Plasma runtime modules",
+        "Verifying Plasma runtime",
+        "Checking Plasma QML runtime",
+        "Starting display transport",
+        "Starting system services",
+        "Starting KDE Plasma",
+        "Validating KDE desktop",
+        "Applying desktop settings",
+    )
+
     init {
         val recoveryFailure = runCatching {
             installer.recoverInterruptedActivation()
@@ -58,6 +74,10 @@ class RuntimeEngine private constructor(private val context: Context) {
         val installed = paths.installMarker.isFile && paths.rootfs.isDirectory
         val lastInstallFailure = installer.lastFailure()
         val interruptedInstall = installer.wasInterrupted()
+        val previousRuntimeCrash = File(paths.logsDir, "proroot-crash.log")
+            .takeIf { it.isFile }
+            ?.readText()
+            ?.takeIf { it.contains("[proroot] SIGSEGV") || it.contains("[proroot] SIGABRT") }
 
         RuntimeEvents.publish(
             when {
@@ -66,6 +86,14 @@ class RuntimeEngine private constructor(private val context: Context) {
                     message = "Linux environment recovery failed",
                     detail = recoveryFailure.stackTraceToString().takeLast(16_000),
                     installed = installed,
+                    running = false,
+                )
+                installed && previousRuntimeCrash != null -> RuntimeStatus(
+                    phase = RuntimePhase.failed,
+                    progress = 0.0,
+                    message = "Previous Linux session crashed",
+                    detail = previousRuntimeCrash.takeLast(12_000),
+                    installed = true,
                     running = false,
                 )
                 installed -> RuntimeStatus(
@@ -146,19 +174,31 @@ class RuntimeEngine private constructor(private val context: Context) {
                 if (session.isRunning()) return@withLock
                 startForegroundHost()
 
-                RuntimeEvents.publish(
-                    RuntimeStatus(
-                        phase = RuntimePhase.starting,
-                        message = "Preparing Linux runtime",
-                        installed = true,
-                    ),
-                )
+                val startupStartedAt = System.nanoTime()
+                val startupHistory = mutableListOf<String>()
+                val publishStage: (String) -> Unit = { stage ->
+                    if (startupHistory.lastOrNull() != stage) startupHistory += stage
+                    publishStarting(stage, startupHistory, startupStartedAt)
+                }
+                publishStage("Preparing Linux runtime")
 
                 val failure = runCatching {
-                    installer.prepareInstalledRuntime { stage ->
-                        publishStarting(stage)
+                    installer.prepareInstalledRuntime(publishStage)
+
+                    publishStage("Checking Plasma QML runtime")
+                    val qmlProbe = runner.exec(
+                        command = "/usr/local/lib/proroot/check-qml-runtime.sh",
+                        timeoutSeconds = 15,
+                        fakeRoot = false,
+                    )
+                    File(paths.logsDir, "qml-runtime.log").writeText(qmlProbe.output)
+                    check(qmlProbe.successful) {
+                        "Plasma QML import probe failed via ${runner.runtimeId} " +
+                            "(exit ${qmlProbe.exitCode}):\n" +
+                            qmlProbe.output.takeLast(4_000)
                     }
-                    startDesktopOnce(::publishStarting)
+
+                    startDesktopOnce(publishStage)
                 }.exceptionOrNull()
 
                 if (failure == null) {
@@ -211,11 +251,37 @@ class RuntimeEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun publishStarting(message: String) {
+    private fun publishStarting(
+        message: String,
+        history: List<String>,
+        startedAtNanos: Long,
+    ) {
+        val index = startupStageOrder.indexOf(message)
+            .takeIf { it >= 0 }
+            ?: history.lastIndex.coerceAtLeast(0)
+        val progress = ((index + 1).toDouble() / (startupStageOrder.size + 1))
+            .coerceIn(0.04, 0.96)
+        val elapsed = ((System.nanoTime() - startedAtNanos) / 1_000_000_000L)
+            .coerceAtLeast(0L)
+        val recent = history.takeLast(5)
+        val stageDetail = buildString {
+            recent.forEachIndexed { recentIndex, stage ->
+                val active = recentIndex == recent.lastIndex
+                append(if (active) "› " else "✓ ")
+                appendLine(stage)
+            }
+        }.trimEnd()
+
         RuntimeEvents.publish(
             RuntimeStatus(
                 phase = RuntimePhase.starting,
+                progress = progress,
                 message = message,
+                elapsedSeconds = elapsed,
+                stageProgress = progress,
+                stageDetail = stageDetail,
+                completedItems = index.coerceAtLeast(0),
+                totalItems = startupStageOrder.size,
                 installed = true,
                 running = false,
             ),
