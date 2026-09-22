@@ -188,14 +188,15 @@ class RuntimeEngine private constructor(private val context: Context) {
                     publishStarting(stage, startupHistory, startupStartedAt)
                 }
                 publishStage("Preparing Linux runtime")
+                paths.prorootCrashDumps.forEach(File::delete)
 
                 val failure = runCatching {
                     installer.prepareInstalledRuntime(publishStage)
 
                     publishStage("Checking Plasma QML runtime")
                     val qmlProbe = runner.exec(
-                        command = "/usr/local/lib/proroot/check-qml-runtime.sh",
-                        timeoutSeconds = 15,
+                        command = "/usr/local/lib/proroot/check-qml-runtime.sh --files-only",
+                        timeoutSeconds = 10,
                         fakeRoot = false,
                     )
                     File(paths.logsDir, "qml-runtime.log").writeText(qmlProbe.output)
