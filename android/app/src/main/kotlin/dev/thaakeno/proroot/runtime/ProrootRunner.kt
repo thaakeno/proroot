@@ -193,6 +193,15 @@ class ProrootRunner(
             "LANG" to "C.UTF-8",
             "LC_ALL" to "C.UTF-8",
         )
+        // ProRoot v1.2.8's inline ARM64 SVC patcher is unsafe for some
+        // long-lived Qt/KDE desktop processes on this device. Keep ProRoot's
+        // linker/interposition/path-translation runtime, but disable binary
+        // rewriting for the unprivileged desktop side. Installer/fake-root
+        // commands keep the patcher enabled for raw-syscall compatibility.
+        if (!fakeRoot) {
+            env["PROROOT_NO_PATCH"] = "1"
+        }
+
         env.putAll(extra)
         return env
     }
