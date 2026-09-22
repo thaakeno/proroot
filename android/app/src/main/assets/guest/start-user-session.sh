@@ -40,9 +40,9 @@ cleanup_audio() {
 
 cleanup_session() {
     stop_pid "$session_pid"
-    pkill -x startplasma-wayland >/dev/null 2>&1 || true
-    pkill -x plasmashell >/dev/null 2>&1 || true
-    pkill -x kwin_wayland >/dev/null 2>&1 || true
+    if [[ -n "$session_pid" ]]; then
+        wait "$session_pid" >/dev/null 2>&1 || true
+    fi
 }
 trap 'cleanup_session; cleanup_audio' EXIT INT TERM
 
@@ -83,11 +83,6 @@ if wait_for_socket "$runtime/pipewire-0"; then
     wait_for_socket "$pulse_dir/native" 50 || true
 fi
 
-# dbus-run-session and the session dbus-daemon were launched while ProRoot's
-# normal syscall patching was still enabled. Disable only the inline ARM64
-# patcher for the Qt/KDE side, where v1.2.8 has been unstable on this device.
-export PROROOT_NO_PATCH=1
-
 env_file="$runtime/proroot-session.env"
 persist_env() {
     local name="$1"
@@ -107,7 +102,7 @@ persist_env() {
         GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
         ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
-        FD_FORCE_KGSL PROROOT_REFRESH_HZ PROROOT_NO_PATCH
+        FD_FORCE_KGSL PROROOT_REFRESH_HZ
     do
         persist_env "$name"
     done
@@ -120,8 +115,8 @@ kwriteconfig6 --file startkderc --group General --key systemdBoot false >/dev/nu
 /usr/local/lib/proroot/check-qml-runtime.sh --files-only
 
 plasma_ready() {
-    pgrep -x kwin_wayland >/dev/null 2>&1 || return 1
-    pgrep -x plasmashell >/dev/null 2>&1 || return 1
+    [[ -n "$session_pid" ]] || return 1
+    kill -0 "$session_pid" >/dev/null 2>&1 || return 1
     find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q . || return 1
     dbus-send \
         --session \
@@ -147,16 +142,15 @@ wait_for_plasma() {
     return 1
 }
 
-# One canonical desktop path. If Plasma cannot become healthy, fail loudly.
-startplasma-wayland &
+# Anland's minimal Plasma path: KWin owns Wayland and starts plasmashell.
+# This avoids ksmserver/kcminit, which are the processes that abort in the
+# full startplasma-wayland session under this rootless Android runtime.
+kwin_wayland plasmashell &
 session_pid=$!
 
-if ! wait_for_plasma 250; then
-    echo "startplasma-wayland did not become healthy" >&2
+if ! wait_for_plasma 300; then
+    echo "KWin/Plasma shell did not become healthy" >&2
     exit 70
 fi
-
-command -v kded6 >/dev/null 2>&1 && kded6 >/dev/null 2>&1 &
-command -v krunner >/dev/null 2>&1 && krunner >/dev/null 2>&1 &
 
 wait "$session_pid"
