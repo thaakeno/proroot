@@ -10,8 +10,8 @@ export USER=linux
 export LOGNAME=linux
 export SHELL=/bin/bash
 export PATH=/usr/local/lib/proroot:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export LANG=C.UTF-8
-export LC_ALL=C.UTF-8
+export LANG=C.utf8
+export LC_ALL=C.utf8
 export XDG_CONFIG_HOME=/home/linux/.config
 export XDG_CACHE_HOME=/home/linux/.cache
 export XDG_DATA_HOME=/home/linux/.local/share
@@ -24,6 +24,7 @@ unset ANLAND_NO_DRM_DEVICE ANLAND_DRM_DEVICE EGL_PLATFORM
 unset ANLAND_PIPEWIRE_UNRESTRICTED ANLAND_SOFTWARE_SESSION
 unset MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER
 unset FD_FORCE_KGSL XWAYLAND_FORCE_KGSL_SURFACELESS
+unset PROROOT_NO_PATCH
 
 mkdir -p     "$runtime"     /tmp/.X11-unix     "$XDG_CONFIG_HOME"     "$XDG_CACHE_HOME"     "$XDG_DATA_HOME"     "$XDG_STATE_HOME"
 chmod 0700 "$runtime"
