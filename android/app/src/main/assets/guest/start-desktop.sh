@@ -59,17 +59,16 @@ export ANLAND_SOCKET=/tmp/anland/display_daemon.sock
 export ANLAND_PIPEWIRE_UNRESTRICTED=1
 export EGL_PLATFORM=surfaceless
 
-# ProRoot PC targets Snapdragon/KGSL hardware acceleration. Do not silently
-# downgrade KWin's internal Qt Quick renderer to the SHM/software path. The
-# Anland KWin backend already accepts an explicit render-device override; Mesa's
-# KGSL build can create GBM/DRI resources directly from /dev/kgsl-3d0 when the
-# kgsl loader is selected.
+# PRoot has no kernel DRM render node. Upstream Anland's supported PRoot path
+# is surfaceless EGL + KGSL; do not lie to KWin by passing /dev/kgsl-3d0 as a
+# DRM node. The compositor scene and Wayland/Xwayland clients still render on
+# Adreno through Mesa's KGSL Freedreno/Turnip stack.
 if [[ ! -r /dev/kgsl-3d0 ]]; then
-    echo "KGSL render device /dev/kgsl-3d0 is unavailable; refusing software rendering fallback" >&2
+    echo "KGSL render device /dev/kgsl-3d0 is unavailable; refusing CPU rendering" >&2
     exit 72
 fi
 
-export ANLAND_DRM_DEVICE=/dev/kgsl-3d0
+export ANLAND_NO_DRM_DEVICE=1
 export MESA_LOADER_DRIVER_OVERRIDE=kgsl
 export TURNIP_KMD=kgsl
 export GALLIUM_DRIVER=freedreno

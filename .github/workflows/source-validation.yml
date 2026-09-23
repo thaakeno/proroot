@@ -111,7 +111,13 @@ jobs:
           grep -q 'kinfocenter' android/app/src/main/kotlin/dev/thaakeno/proroot/install/RuntimeInstaller.kt
           grep -q 'Audio is process-global' android/app/src/main/cpp/patch-anland-lifecycle.cmake
           grep -q -- '--disable-software-rasterizer' android/app/src/main/assets/guest/launch-app-runtime.sh
+          grep -q 'namespace_sandbox_available' android/app/src/main/assets/guest/launch-app-runtime.sh
           grep -q 'MOZ_DISABLE_GPU_SANDBOX=1' android/app/src/main/assets/guest/launch-app-runtime.sh
+          grep -q 'ANLAND_NO_DRM_DEVICE=1' android/app/src/main/assets/guest/start-desktop.sh
+          if grep -q 'ANLAND_DRM_DEVICE=/dev/kgsl-3d0' android/app/src/main/assets/guest/start-desktop.sh; then
+            echo 'Raw KGSL device must not be passed to KWin as DRM' >&2
+            exit 1
+          fi
           if grep -q 'scheduleSurfaceRestart' android/app/src/main/kotlin/dev/thaakeno/proroot/display/LinuxSurfaceView.kt; then
             echo 'Destructive SurfaceView resize restart returned' >&2
             exit 1
