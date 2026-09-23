@@ -1,6 +1,9 @@
 package dev.thaakeno.proroot.runtime
 
+import android.util.Log
 import java.io.File
+import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 
 class DesktopSession(
@@ -29,8 +32,16 @@ class DesktopSession(
 
         val logFile = File(paths.logsDir, "desktop-session.log")
         logThread = Thread {
-            logFile.outputStream().buffered().use { output ->
-                started.inputStream.copyTo(output)
+            try {
+                logFile.outputStream().buffered().use { output ->
+                    started.inputStream.copyTo(output)
+                }
+            } catch (error: IOException) {
+                // Android closes the process pipe when its owner exits or is
+                // destroyed. A log-copy failure must not crash the whole app.
+                if (error !is InterruptedIOException && started.isAlive) {
+                    Log.w("DesktopSession", "Desktop log stream ended", error)
+                }
             }
         }.apply {
             name = "desktop-session-log"

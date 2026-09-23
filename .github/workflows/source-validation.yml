@@ -2,7 +2,7 @@ name: Source validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/runtime-pc-hardening]
   pull_request:
   workflow_dispatch:
 
@@ -70,14 +70,19 @@ jobs:
         run: |
           bash -n android/app/src/main/assets/guest/start-desktop.sh
           bash -n android/app/src/main/assets/guest/start-user-session.sh
+          bash -n android/app/src/main/assets/guest/start-plasmashell.sh
+          bash -n android/app/src/main/assets/guest/monitor-plasma-display.sh
           bash -n android/app/src/main/assets/guest/check-desktop-health.sh
           bash -n android/app/src/main/assets/guest/check-qml-runtime.sh
           bash -n android/app/src/main/assets/guest/kwin_wayland_wrapper
           bash -n android/app/src/main/assets/guest/start-system-services.sh
           bash -n android/app/src/main/assets/guest/launch-desktop-app.sh
+          bash -n android/app/src/main/assets/guest/launch-app-runtime.sh
+          bash -n android/app/src/main/assets/guest/launch-chromium-runtime.sh
           bash -n android/app/src/main/assets/guest/session-env.sh
           bash -n android/app/src/main/assets/guest/set-desktop-scale.sh
           python3 -m py_compile             android/app/src/main/assets/guest/host_dbus.py             android/app/src/main/assets/guest/host-upower-bridge.py             android/app/src/main/assets/guest/host-login1-bridge.py             android/app/src/main/assets/guest/set-desktop-scale.py             android/app/src/main/assets/guest/prepare-app-runtime.py             android/app/src/main/assets/guest/desktop-launcher-bridge.py
+          python3 -m unittest discover -s tools -p 'test_prepare_app_runtime.py'
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           ET.parse("android/app/src/main/assets/guest/system-bus.conf")
@@ -108,6 +113,14 @@ jobs:
           grep -q 'kbuildsycoca6 --noincremental' android/app/src/main/assets/guest/start-user-session.sh
           grep -q 'kinfocenter' android/app/src/main/kotlin/dev/thaakeno/proroot/install/RuntimeInstaller.kt
           grep -q 'Audio is process-global' android/app/src/main/cpp/patch-anland-lifecycle.cmake
+          grep -q -- '--disable-software-rasterizer' android/app/src/main/assets/guest/launch-app-runtime.sh
+          grep -q 'namespace_sandbox_available' android/app/src/main/assets/guest/launch-app-runtime.sh
+          grep -q 'MOZ_DISABLE_GPU_SANDBOX=1' android/app/src/main/assets/guest/launch-app-runtime.sh
+          grep -q 'ANLAND_NO_DRM_DEVICE=1' android/app/src/main/assets/guest/start-desktop.sh
+          if grep -q 'ANLAND_DRM_DEVICE=/dev/kgsl-3d0' android/app/src/main/assets/guest/start-desktop.sh; then
+            echo 'Raw KGSL device must not be passed to KWin as DRM' >&2
+            exit 1
+          fi
           if grep -q 'scheduleSurfaceRestart' android/app/src/main/kotlin/dev/thaakeno/proroot/display/LinuxSurfaceView.kt; then
             echo 'Destructive SurfaceView resize restart returned' >&2
             exit 1

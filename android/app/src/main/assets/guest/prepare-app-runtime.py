@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Create per-session desktop-entry overrides for Chromium/Electron runtimes.
+"""Create per-session desktop-entry overrides for runtime families.
 
-This is capability-based rather than app-id based: any desktop entry whose
-executable identifies itself as Chromium or Electron gets the same PRoot
-sandbox/Wayland launcher. PRoot cannot provide Chromium's Linux namespaces.
+This is capability-based rather than app-id based. Chromium/Electron share one
+policy and Mozilla-family applications share another, so newly installed ARM64
+apps inherit the same compatibility behavior without maintaining app-name
+patches.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("HOME", "/home/linux"))
 OVERRIDE_DIR = HOME / ".local/share/applications"
-WRAPPER = "/usr/local/lib/proroot/launch-chromium-runtime.sh"
+WRAPPER = "/usr/local/lib/proroot/launch-app-runtime.sh"
 SEARCH_DIRS = (
     Path("/usr/share/applications"),
     Path("/usr/local/share/applications"),
@@ -25,6 +26,7 @@ SEARCH_DIRS = (
 
 FIELD_CODE = re.compile(r"^%[fFuUdDnNickvm]$")
 STATIC_SCAN_BYTES = 8 * 1024 * 1024
+SHELL_EXEC = re.compile(r"(?:^|\n)\s*exec\s+([/][^\s\"']+)")
 
 
 def main_exec(text: str) -> str | None:
@@ -48,23 +50,36 @@ def executable_from_exec(exec_line: str) -> str | None:
         return None
 
     index = 0
-    if tokens[0] == "env":
+    if tokens[0] in ("env", "/usr/bin/env"):
         index = 1
-        while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
-            index += 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                break
+            if token in ("-u", "--unset"):
+                index += 2
+                continue
+            if token.startswith("--unset=") or token.startswith("-u"):
+                index += 1
+                continue
+            if "=" in token and not token.startswith("-"):
+                index += 1
+                continue
+            break
     if index >= len(tokens):
         return None
 
     command = tokens[index]
     if FIELD_CODE.match(command):
         return None
-    if command.startswith("/"):
+    if command.startswith("/") or Path(command).is_absolute():
         return command
     return shutil.which(command)
 
 
 @lru_cache(maxsize=None)
-def classify(executable: str) -> str | None:
+def classify(executable: str, depth: int = 0) -> str | None:
     """Classify a launcher without executing it.
 
     Startup happens before the Wayland compositor exists, so probing arbitrary
@@ -79,16 +94,31 @@ def classify(executable: str) -> str | None:
         return None
 
     lowered_path = str(resolved).lower()
-    if "electron" in resolved.name.lower():
+    lowered_name = resolved.name.lower()
+    if "firefox" in lowered_name or "mozilla" in lowered_path:
+        return "mozilla"
+    if "electron" in lowered_name:
         return "electron"
-    if "chromium" in lowered_path:
+    if "chromium" in lowered_path or "chrome" in lowered_name or "brave" in lowered_path:
         return "chromium"
 
+    # Some Electron builds (including VS Code) place their identifying strings
+    # beyond the first STATIC_SCAN_BYTES of a large executable. Their packaged
+    # app manifest and Chromium sandbox helper identify the runtime without
+    # executing the binary or relying on the desktop entry's product name.
+    if (resolved.parent / "resources/app/package.json").is_file() and (
+        resolved.parent / "chrome-sandbox"
+    ).is_file():
+        return "electron"
+
+    if depth > 3:
+        return None
     try:
         with resolved.open("rb") as source:
-            sample = source.read(STATIC_SCAN_BYTES).lower()
+            raw_sample = source.read(STATIC_SCAN_BYTES)
     except OSError:
         return None
+    sample = raw_sample.lower()
 
     electron_markers = (
         b"electron_run_as_node",
@@ -103,24 +133,45 @@ def classify(executable: str) -> str | None:
         b"chromium",
         b"ozone-platform",
     )
+    mozilla_markers = (
+        b"moz_disable_content_sandbox",
+        b"moz_disable_gpu_sandbox",
+        b"moz_webrender",
+        b"xre_main",
+    )
 
     if any(marker in sample for marker in electron_markers):
         return "electron"
     if any(marker in sample for marker in chromium_markers):
         return "chromium"
+    if any(marker in sample for marker in mozilla_markers):
+        return "mozilla"
+    # Vendor launchers such as /usr/bin/code often resolve to a short shell
+    # script that execs the actual Electron binary. Inspect the target without
+    # running the script or adding a product-name special case.
+    if sample.startswith(b"#!"):
+        script = raw_sample.decode("utf-8", "replace")
+        for match in SHELL_EXEC.finditer(script):
+            nested = Path(match.group(1))
+            if nested == resolved:
+                continue
+            family = classify(str(nested), depth + 1)
+            if family:
+                return family
     return None
 
-def override_exec(text: str, family: str, original_exec: str) -> str:
-    in_desktop = False
+def override_exec(text: str, family: str) -> str:
+    section = ""
     output: list[str] = []
-    replaced = False
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("[") and line.endswith("]"):
-            in_desktop = line == "[Desktop Entry]"
-        if in_desktop and not replaced and line.startswith("Exec="):
-            output.append(f"Exec={WRAPPER} {family} {original_exec}")
-            replaced = True
+            section = line
+        if (section == "[Desktop Entry]" or section.startswith("[Desktop Action ")) and line.startswith("Exec="):
+            command = raw.split("=", 1)[1]
+            # Desktop actions (new window/private window) are independent
+            # launch paths. Apply the same family policy to each action.
+            output.append(f"Exec={WRAPPER} {family} {command}")
         else:
             output.append(raw)
     return "\n".join(output) + "\n"
@@ -143,14 +194,16 @@ def main() -> int:
                 continue
             executable = executable_from_exec(exec_line)
             if not executable:
+                print(f"{desktop.name}: skipped (unresolved Exec)")
                 continue
             family = classify(executable)
             if family is None:
+                print(f"{desktop.name}: skipped (unclassified {executable})")
                 continue
 
             target = OVERRIDE_DIR / desktop.name
             target.write_text(
-                override_exec(text, family, exec_line),
+                override_exec(text, family),
                 encoding="utf-8",
             )
             managed.add(desktop.name)

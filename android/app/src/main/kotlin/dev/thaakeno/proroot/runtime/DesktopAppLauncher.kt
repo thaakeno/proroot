@@ -34,19 +34,20 @@ class DesktopAppLauncher(
                 ),
             )
             socket.soTimeout = 3_000
-            socket.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
-                writer.write(desktopId.removeSuffix(".desktop"))
-                writer.newLine()
-                writer.flush()
+            // Keep the socket open while reading the server reply. Closing a
+            // LocalSocket output stream can close the underlying connection.
+            val writer = socket.outputStream.bufferedWriter(Charsets.UTF_8)
+            writer.write(desktopId.removeSuffix(".desktop"))
+            writer.newLine()
+            writer.flush()
 
-                val response = socket.inputStream
-                    .bufferedReader(Charsets.UTF_8)
-                    .readLine()
-                    .orEmpty()
-                check(response == "OK") {
-                    response.removePrefix("ERR ").ifBlank {
-                        "KDE app launcher rejected the request"
-                    }
+            val response = socket.inputStream
+                .bufferedReader(Charsets.UTF_8)
+                .readLine()
+                .orEmpty()
+            check(response == "OK") {
+                response.removePrefix("ERR ").ifBlank {
+                    "KDE app launcher rejected the request"
                 }
             }
         }

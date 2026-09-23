@@ -1,6 +1,9 @@
 package dev.thaakeno.proroot.runtime
 
+import android.util.Log
 import java.io.File
+import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 
 class SystemServicesSession(
@@ -32,8 +35,14 @@ class SystemServicesSession(
 
         val logFile = File(paths.logsDir, "system-services.log")
         logThread = Thread {
-            logFile.outputStream().buffered().use { output ->
-                started.inputStream.copyTo(output)
+            try {
+                logFile.outputStream().buffered().use { output ->
+                    started.inputStream.copyTo(output)
+                }
+            } catch (error: IOException) {
+                if (error !is InterruptedIOException && started.isAlive) {
+                    Log.w("SystemServicesSession", "System services log stream ended", error)
+                }
             }
         }.apply {
             name = "system-services-log"

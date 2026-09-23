@@ -38,7 +38,17 @@ class RuntimeDiagnostics(
             ?.associate { file ->
                 file.name to readTail(file, 120_000)
             }
-            ?: emptyMap()
+            ?.toMutableMap() ?: mutableMapOf()
+        File(paths.rootfs, "run/user").listFiles()?.forEach { userDir ->
+            listOf("plasma-display.log", "plasmashell-restart.log", "plasma-shell-exits.log").forEach { name ->
+                File(userDir, "anland-logs/$name").takeIf { it.isFile }?.let { logs[name] = readTail(it, 120_000) }
+            }
+        }
+        val kwinQtQuickRenderer = when {
+            logs["desktop-session.log"]?.contains("forcing Qt Quick to use the software renderer") == true ->
+                "software (KWin no-DRM QPA path)"
+            else -> "unverified; inspect desktop-session.log Qt scene graph output"
+        }
         val prorootCrashDumps = paths.prorootCrashDumps
             .filter { it.isFile && it.length() > 0L }
             .distinctBy { it.absolutePath }
@@ -215,6 +225,7 @@ class RuntimeDiagnostics(
             "anlandDaemon" to daemon.isRunning(),
             "systemServices" to systemServices.isRunning(),
             "desktopProcess" to session.isRunning(),
+            "kwinQtQuickRenderer" to kwinQtQuickRenderer,
             "desktopUid" to android.os.Process.myUid(),
             "installedApps" to if (installed) appCatalog.list().size else 0,
             "installInProgress" to paths.installInProgress.isFile,

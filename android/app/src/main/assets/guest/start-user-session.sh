@@ -74,6 +74,7 @@ wireplumber_pid=""
 pulse_pid=""
 session_pid=""
 launcher_pid=""
+monitor_pid=""
 
 cleanup_audio() {
     stop_pid "$pulse_pid"
@@ -83,6 +84,7 @@ cleanup_audio() {
 }
 
 cleanup_session() {
+    stop_pid "$monitor_pid"
     stop_pid "$launcher_pid"
     rm -f "$runtime/proroot-app-launcher.sock"
     stop_pid "$session_pid"
@@ -119,16 +121,33 @@ export PIPEWIRE_RUNTIME_DIR="$runtime"
 export PULSE_RUNTIME_PATH="$pulse_dir"
 export PULSE_SERVER="unix:$pulse_dir/native"
 
-# Prefer native Wayland for browser/Electron families globally. This is session
-# policy, not an Apps-tab per-application rewrite.
-export MOZ_ENABLE_WAYLAND=1
-export MOZ_FAKE_NO_SANDBOX=1
-export ELECTRON_OZONE_PLATFORM_HINT=wayland
+# Keep the session itself toolkit-neutral. Runtime-family launch policy is
+# applied by launch-app-runtime.sh. Chromium/Electron select a live display
+# at launch time; this session currently runs Wayland without Xwayland.
+unset MOZ_FAKE_NO_SANDBOX
+unset ELECTRON_OZONE_PLATFORM_HINT
+
+# Android's inherited seccomp policy kills interactive Bash when Readline
+# starts in this guest. Konsole then closes because its shell has exited.
+# Keep Bash interactive while disabling the line-editing path that raises
+# SIGSYS. Respect a profile the user has already selected.
+konsole_dir="${XDG_DATA_HOME:-$HOME/.local/share}/konsole"
+konsole_config="${XDG_CONFIG_HOME:-$HOME/.config}/konsolerc"
+mkdir -p "$konsole_dir" "${konsole_config%/*}"
+cat >"$konsole_dir/Proroot.profile" <<'EOF'
+[General]
+Name=Proroot
+Command=/bin/bash --noediting -i
+EOF
+if ! grep -q '^DefaultProfile=' "$konsole_config" 2>/dev/null; then
+    printf '\n[Desktop Entry]\nDefaultProfile=Proroot.profile\n' >>"$konsole_config"
+fi
 
 # Build capability-based desktop overrides once per session. This makes apps
 # started by Plasma and apps started from Android use the same compatibility
 # path instead of maintaining app-specific launch commands.
-python3 /usr/local/lib/proroot/prepare-app-runtime.py     >"$log_dir/app-runtime-compat.log" 2>&1 || true
+python3 /usr/local/lib/proroot/prepare-app-runtime.py \
+    >"$log_dir/app-runtime-compat.log" 2>&1 || true
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 XDG_MENU_PREFIX=plasma- \
 XDG_CONFIG_DIRS=/etc/xdg \
@@ -152,9 +171,9 @@ persist_env() {
         PIPEWIRE_RUNTIME_DIR PULSE_RUNTIME_PATH PULSE_SERVER \
         QT_QPA_PLATFORM QML_IMPORT_PATH QML2_IMPORT_PATH QML_IMPORT_TRACE QT_DEBUG_PLUGINS QT_SCALE_FACTOR \
         GDK_BACKEND SDL_VIDEODRIVER CLUTTER_BACKEND \
-        ANLAND ANLAND_SOCKET ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
+        ANLAND ANLAND_SOCKET ANLAND_DRM_DEVICE ANLAND_NO_DRM_DEVICE ANLAND_PIPEWIRE_UNRESTRICTED \
         EGL_PLATFORM MESA_LOADER_DRIVER_OVERRIDE TURNIP_KMD GALLIUM_DRIVER \
-        FD_FORCE_KGSL PROROOT_REFRESH_HZ         MOZ_ENABLE_WAYLAND MOZ_FAKE_NO_SANDBOX ELECTRON_OZONE_PLATFORM_HINT
+        FD_FORCE_KGSL PROROOT_REFRESH_HZ
     do
         persist_env "$name"
     done
@@ -174,10 +193,7 @@ kwriteconfig6 --file kdeglobals --group KDE --key AnimationDurationFactor 0.65 >
 
 /usr/local/lib/proroot/check-qml-runtime.sh --files-only
 
-plasma_ready() {
-    [[ -n "$session_pid" ]] || return 1
-    kill -0 "$session_pid" >/dev/null 2>&1 || return 1
-    find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q . || return 1
+plasmashell_owned() {
     dbus-send \
         --session \
         --print-reply=literal \
@@ -185,6 +201,13 @@ plasma_ready() {
         /org/freedesktop/DBus \
         org.freedesktop.DBus.NameHasOwner \
         string:org.kde.plasmashell 2>/dev/null | grep -q 'true'
+}
+
+plasma_ready() {
+    [[ -n "$session_pid" ]] || return 1
+    kill -0 "$session_pid" >/dev/null 2>&1 || return 1
+    find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit | grep -q . || return 1
+    plasmashell_owned
 }
 
 wait_for_plasma() {
@@ -205,13 +228,26 @@ wait_for_plasma() {
 # Anland's minimal Plasma path: KWin owns Wayland and starts plasmashell.
 # This avoids ksmserver/kcminit, which are the processes that abort in the
 # full startplasma-wayland session under this rootless Android runtime.
-kwin_wayland plasmashell &
+kwin_wayland /usr/local/lib/proroot/start-plasmashell.sh &
 session_pid=$!
 
 if ! wait_for_plasma 300; then
     echo "KWin/Plasma shell did not become healthy" >&2
     exit 70
 fi
+
+wayland_socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit)"
+if [[ -z "$wayland_socket" ]]; then
+    echo "KWin published no Wayland socket" >&2
+    exit 71
+fi
+export WAYLAND_DISPLAY="${wayland_socket##*/}"
+
+# Observe the shell after startup, when the Android app intentionally avoids
+# running guest probes against a live desktop. The monitor also recovers a
+# shell that exits while KWin and application windows remain alive.
+/usr/local/lib/proroot/monitor-plasma-display.sh &
+monitor_pid=$!
 
 # Start desktop media services only after KWin has published Wayland and
 # plasmashell owns its D-Bus name. Starting them earlier can D-Bus-activate the
@@ -229,9 +265,7 @@ fi
 # Launch Android-requested apps from this exact KDE session instead of spawning
 # a second ProRoot runtime. This keeps Wayland, DBus, audio and GPU environment
 # identical to launching the same icon from Plasma.
-wayland_socket="$(find "$runtime" -maxdepth 1 -type s -name 'wayland-*' -print -quit)"
 if [[ -n "$wayland_socket" ]]; then
-    export WAYLAND_DISPLAY="${wayland_socket##*/}"
     /usr/local/lib/proroot/desktop-launcher-bridge.py         >"$log_dir/desktop-launcher.log" 2>&1 &
     launcher_pid=$!
     for _ in {1..40}; do

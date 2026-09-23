@@ -68,6 +68,7 @@ class DesktopProvisioner(
                 packages = """
                     fonts-noto-core fonts-noto-color-emoji fonts-liberation
                     firefox-esr brave-browser code
+                    libqt5core5t64 libpci3
                     mesa-utils vulkan-tools
                 """.trimIndent(),
             ),
@@ -213,6 +214,8 @@ class DesktopProvisioner(
             test -x /usr/bin/firefox-esr
             test -x /usr/bin/code
             test -x /usr/bin/brave-browser-stable
+            test -r /usr/lib/aarch64-linux-gnu/libQt5Core.so.5
+            test -r /usr/lib/aarch64-linux-gnu/libpci.so.3
             test -x /usr/lib/polkit-1/polkitd
             test -x /usr/libexec/packagekitd
             test -x /usr/bin/pkcon
