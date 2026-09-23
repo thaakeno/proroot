@@ -29,6 +29,17 @@ class PrepareAppRuntimeTest(unittest.TestCase):
             binary.write_bytes(b"\x7fELF" + b"\0" * 64 + b"resources/app.asar")
             self.assertEqual(runtime.classify(str(binary)), "electron")
 
+    def test_packaged_electron_binary_is_classified_without_embedded_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "generic-editor"
+            binary.write_bytes(b"\x7fELF" + b"\0" * 64)
+            manifest = root / "resources/app/package.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('{"name":"generic-editor"}')
+            (root / "chrome-sandbox").write_bytes(b"helper")
+            self.assertEqual(runtime.classify(str(binary)), "electron")
+
     def test_desktop_actions_use_the_same_runtime_family(self) -> None:
         desktop = (
             "[Desktop Entry]\nExec=/opt/browser %U\n"

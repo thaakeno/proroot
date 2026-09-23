@@ -1,7 +1,7 @@
 name: proroot_pc
 description: Rootless native-performance Linux desktop for Android.
 publish_to: "none"
-version: 0.2.0-dev.8+49
+version: 0.2.0-dev.9+50
 
 environment:
   sdk: ">=3.6.0 <4.0.0"

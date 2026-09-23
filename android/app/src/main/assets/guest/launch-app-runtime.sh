@@ -101,6 +101,15 @@ case "$family" in
             log_runtime "sandbox=android-app-boundary kernel-userns=unavailable"
         fi
 
+        if [[ "$family" == electron ]]; then
+            # Code's separate Electron GPU child repeatedly aborts on this
+            # no-DRM Wayland compositor, even with --disable-gpu. Keep its
+            # software graphics path inside the main process instead.
+            exec env "${original_env[@]}" "$executable" \
+                "${sandbox_args[@]}" --ozone-platform="$ozone_platform" \
+                --disable-gpu --in-process-gpu "$@"
+        fi
+
         exec env "${original_env[@]}" "$executable" \
             "${sandbox_args[@]}" \
             --ozone-platform="$ozone_platform" \

@@ -102,6 +102,15 @@ def classify(executable: str, depth: int = 0) -> str | None:
     if "chromium" in lowered_path or "chrome" in lowered_name or "brave" in lowered_path:
         return "chromium"
 
+    # Some Electron builds (including VS Code) place their identifying strings
+    # beyond the first STATIC_SCAN_BYTES of a large executable. Their packaged
+    # app manifest and Chromium sandbox helper identify the runtime without
+    # executing the binary or relying on the desktop entry's product name.
+    if (resolved.parent / "resources/app/package.json").is_file() and (
+        resolved.parent / "chrome-sandbox"
+    ).is_file():
+        return "electron"
+
     if depth > 3:
         return None
     try:

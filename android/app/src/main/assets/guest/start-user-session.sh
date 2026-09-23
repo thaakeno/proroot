@@ -127,6 +127,22 @@ export PULSE_SERVER="unix:$pulse_dir/native"
 unset MOZ_FAKE_NO_SANDBOX
 unset ELECTRON_OZONE_PLATFORM_HINT
 
+# Android's inherited seccomp policy kills interactive Bash when Readline
+# starts in this guest. Konsole then closes because its shell has exited.
+# Keep Bash interactive while disabling the line-editing path that raises
+# SIGSYS. Respect a profile the user has already selected.
+konsole_dir="${XDG_DATA_HOME:-$HOME/.local/share}/konsole"
+konsole_config="${XDG_CONFIG_HOME:-$HOME/.config}/konsolerc"
+mkdir -p "$konsole_dir" "${konsole_config%/*}"
+cat >"$konsole_dir/Proroot.profile" <<'EOF'
+[General]
+Name=Proroot
+Command=/bin/bash --noediting -i
+EOF
+if ! grep -q '^DefaultProfile=' "$konsole_config" 2>/dev/null; then
+    printf '\n[Desktop Entry]\nDefaultProfile=Proroot.profile\n' >>"$konsole_config"
+fi
+
 # Build capability-based desktop overrides once per session. This makes apps
 # started by Plasma and apps started from Android use the same compatibility
 # path instead of maintaining app-specific launch commands.

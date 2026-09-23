@@ -50,15 +50,17 @@ sample_shell_startup() {
     done
 }
 
-# Keep the shell on the Adreno OpenGL path. Only its Qt Quick render loop is
-# switched to basic to test the threaded scene graph seen before it exited.
-unset QT_QUICK_BACKEND QMLSCENE_DEVICE
-export QSG_RHI_BACKEND=opengl
-export QSG_RENDER_LOOP=basic
+# KWin's no-DRM path already forces Qt Quick software rendering. On this
+# Android device, the separate OpenGL plasmashell is SIGKILLed during startup
+# when the phone's phantom-process quota is exhausted. Starting its known-good
+# software scene graph avoids the black interval while other Wayland clients
+# remain free to use Mesa's Adreno driver.
+unset QSG_RHI_BACKEND QSG_RENDER_LOOP QMLSCENE_DEVICE
+export QT_QUICK_BACKEND=software
 export QSG_INFO=1
 
 printf '%s starting plasmashell backend=%s renderLoop=%s wayland=%s\n' \
-    "$(date -u +%FT%TZ)" "$QSG_RHI_BACKEND" "$QSG_RENDER_LOOP" "${WAYLAND_DISPLAY:-unset}" >>"$log"
+    "$(date -u +%FT%TZ)" "$QT_QUICK_BACKEND" "${QSG_RENDER_LOOP:-default}" "${WAYLAND_DISPLAY:-unset}" >>"$log"
 plasmashell &
 shell_pid=$!
 sample_shell_startup "$shell_pid" &
@@ -67,16 +69,4 @@ status=$?
 printf '%s plasmashell exited status=%s signal=%s\n' \
     "$(date -u +%FT%TZ)" "$status" "$([[ "$status" -gt 128 ]] && echo "$((status - 128))" || echo none)" >>"$log"
 
-if [[ "$status" -eq 137 ]]; then
-    # Build 46 kept this shell alive with software Qt Quick. Preserve the GPU
-    # failure trace, then restore the desktop without restarting KWin or apps.
-    unset QSG_RHI_BACKEND QSG_RENDER_LOOP
-    export QT_QUICK_BACKEND=software
-    printf '%s restarting plasmashell backend=software after GPU SIGKILL\n' \
-        "$(date -u +%FT%TZ)" >>"$log"
-    plasmashell
-    status=$?
-    printf '%s fallback plasmashell exited status=%s\n' \
-        "$(date -u +%FT%TZ)" "$status" >>"$log"
-fi
 exit "$status"
