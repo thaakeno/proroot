@@ -40,7 +40,7 @@ class RuntimeDiagnostics(
             }
             ?.toMutableMap() ?: mutableMapOf()
         File(paths.rootfs, "run/user").listFiles()?.forEach { userDir ->
-            listOf("plasma-display.log", "plasmashell-restart.log").forEach { name ->
+            listOf("plasma-display.log", "plasmashell-restart.log", "plasma-shell-exits.log").forEach { name ->
                 File(userDir, "anland-logs/$name").takeIf { it.isFile }?.let { logs[name] = readTail(it, 120_000) }
             }
         }

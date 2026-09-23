@@ -54,7 +54,7 @@ while :; do
         restarts=$((restarts + 1))
         printf '%s restarting absent plasmashell attempt=%s\n' \
             "$(date -u +%FT%TZ)" "$restarts" >>"$log"
-        plasmashell >>"$log_dir/plasmashell-restart.log" 2>&1 &
+        /usr/local/lib/proroot/start-plasmashell.sh >>"$log_dir/plasmashell-restart.log" 2>&1 &
         missing=0
         sleep 10
     fi

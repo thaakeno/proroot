@@ -212,7 +212,7 @@ wait_for_plasma() {
 # Anland's minimal Plasma path: KWin owns Wayland and starts plasmashell.
 # This avoids ksmserver/kcminit, which are the processes that abort in the
 # full startplasma-wayland session under this rootless Android runtime.
-kwin_wayland plasmashell &
+kwin_wayland /usr/local/lib/proroot/start-plasmashell.sh &
 session_pid=$!
 
 if ! wait_for_plasma 300; then

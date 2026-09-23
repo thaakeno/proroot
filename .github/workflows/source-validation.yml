@@ -70,6 +70,7 @@ jobs:
         run: |
           bash -n android/app/src/main/assets/guest/start-desktop.sh
           bash -n android/app/src/main/assets/guest/start-user-session.sh
+          bash -n android/app/src/main/assets/guest/start-plasmashell.sh
           bash -n android/app/src/main/assets/guest/monitor-plasma-display.sh
           bash -n android/app/src/main/assets/guest/check-desktop-health.sh
           bash -n android/app/src/main/assets/guest/check-qml-runtime.sh
