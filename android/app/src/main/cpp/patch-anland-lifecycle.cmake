@@ -144,5 +144,137 @@ if(window_pos EQUAL -1)
 endif()
 string(REPLACE "${old_window}" "${new_window}" source "${source}")
 
+# The upstream render loop queues a dequeued Android buffer even when the
+# producer is in fallback or fails to finish a frame. Such a buffer has never
+# been rendered and replaces the last good frame with black. Cancel it instead.
+set(old_select [==[
+        if (select_dmabuf(s->ctx, idx) < 0) {
+            api.queueBuffer(s->window, anb, -1);
+            usleep(16000);
+            continue;
+        }
+]==])
+set(new_select [==[
+        if (select_dmabuf(s->ctx, idx) < 0) {
+            api.cancelBuffer(s->window, anb, -1);
+            usleep(16000);
+            continue;
+        }
+]==])
+string(FIND "${source}" "${old_select}" select_pos)
+if(select_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: select_dmabuf anchor not found")
+endif()
+string(REPLACE "${old_select}" "${new_select}" source "${source}")
+
+set(old_refresh [==[
+        int rfence = refresh_done(s->ctx);
+        api.queueBuffer(s->window, anb, rfence);
+]==])
+set(new_refresh [==[
+        int rfence = refresh_done(s->ctx);
+        if (rfence == -2) {
+            /* No completed frame: retain the last displayed buffer. */
+            api.cancelBuffer(s->window, anb, -1);
+            continue;
+        }
+        api.queueBuffer(s->window, anb, rfence);
+]==])
+string(FIND "${source}" "${old_refresh}" refresh_pos)
+if(refresh_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: refresh_done anchor not found")
+endif()
+string(REPLACE "${old_refresh}" "${new_refresh}" source "${source}")
 file(WRITE "${native_consumer}" "${source}")
-message(STATUS "Applied ProRoot Anland lifecycle hardening")
+
+set(display_consumer "${ANLAND_SOURCE}/app/src/main/jni/anland_core/libdisplay_consumer/display_consumer.c")
+if(NOT EXISTS "${display_consumer}")
+    message(FATAL_ERROR "Anland display_consumer.c not found: ${display_consumer}")
+endif()
+file(READ "${display_consumer}" display_source)
+
+set(old_fallback_select [==[
+        if (ctx->fallback)
+            return 0;
+]==])
+set(new_fallback_select [==[
+        if (ctx->fallback)
+            return -1;  /* No producer: do not queue an unrendered buffer. */
+]==])
+string(FIND "${display_source}" "${old_fallback_select}" fallback_select_pos)
+if(fallback_select_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: fallback select anchor not found")
+endif()
+string(REPLACE "${old_fallback_select}" "${new_fallback_select}" display_source "${display_source}")
+
+set(old_no_pending [==[
+    if (!ctx->buffer_pending)
+        return -1;
+]==])
+set(new_no_pending [==[
+    if (!ctx->buffer_pending)
+        return -2;  /* No frame was submitted to the producer. */
+]==])
+string(FIND "${display_source}" "${old_no_pending}" no_pending_pos)
+if(no_pending_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: pending frame anchor not found")
+endif()
+string(REPLACE "${old_no_pending}" "${new_no_pending}" display_source "${display_source}")
+
+set(old_poll_failure [==[
+    if (ret <= 0 || !(pfd.revents & POLLIN)) {
+        enter_fallback(ctx);
+        return -1;
+    }
+]==])
+set(new_poll_failure [==[
+    if (ret <= 0 || !(pfd.revents & POLLIN)) {
+        enter_fallback(ctx);
+        return -2;
+    }
+]==])
+string(FIND "${display_source}" "${old_poll_failure}" poll_failure_pos)
+if(poll_failure_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: frame timeout anchor not found")
+endif()
+string(REPLACE "${old_poll_failure}" "${new_poll_failure}" display_source "${display_source}")
+
+set(old_recv_failure [==[
+    if (n == 0) {
+        enter_fallback(ctx);
+        return -1;
+    }
+    if (n > 0) {
+]==])
+set(new_recv_failure [==[
+    if (n <= 0 || (msg.msg_flags & MSG_CTRUNC)) {
+        enter_fallback(ctx);
+        return -2;
+    }
+    if (n > 0) {
+]==])
+string(FIND "${display_source}" "${old_recv_failure}" recv_failure_pos)
+if(recv_failure_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: frame receive anchor not found")
+endif()
+string(REPLACE "${old_recv_failure}" "${new_recv_failure}" display_source "${display_source}")
+
+set(old_refresh_contract [==[
+ * dedicated fence channel; the message itself is the "frame rendered" signal (no
+ * separate eventfd, no cross-channel ordering) and the optional fence rides as
+ * SCM_RIGHTS ancillary data. Returns the fence fd (caller owns it), or -1 if none /
+ * on error. */
+]==])
+set(new_refresh_contract [==[
+ * dedicated fence channel; the message itself is the "frame rendered" signal (no
+ * separate eventfd, no cross-channel ordering) and the optional fence rides as
+ * SCM_RIGHTS ancillary data. Returns the fence fd (caller owns it), -1 for a
+ * completed frame without a fence, or -2 when no frame may be queued. */
+]==])
+string(FIND "${display_source}" "${old_refresh_contract}" refresh_contract_pos)
+if(refresh_contract_pos EQUAL -1)
+    message(FATAL_ERROR "Anland frame patch: refresh contract anchor not found")
+endif()
+string(REPLACE "${old_refresh_contract}" "${new_refresh_contract}" display_source "${display_source}")
+file(WRITE "${display_consumer}" "${display_source}")
+message(STATUS "Applied ProRoot Anland lifecycle and frame-delivery hardening")
