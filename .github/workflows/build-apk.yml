@@ -3,7 +3,7 @@ name: Build installable APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/runtime-pc-hardening]
     paths:
       - ".github/workflows/build-apk.yml"
   workflow_dispatch:
