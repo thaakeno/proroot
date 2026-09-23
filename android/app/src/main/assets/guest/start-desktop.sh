@@ -40,6 +40,9 @@ export XDG_CURRENT_DESKTOP=KDE
 export XDG_SESSION_DESKTOP=KDE
 export XDG_SESSION_TYPE=wayland
 export QT_QPA_PLATFORM=wayland
+# Record the actual Qt Quick graphics API in desktop-session.log. A successful
+# Vulkan client probe does not establish that Plasma's own scene graph uses GPU.
+export QSG_INFO=1
 qml_root="$(qtpaths6 --query QT_INSTALL_QML 2>/dev/null || true)"
 if [[ -n "$qml_root" && -d "$qml_root" ]]; then
     export QML_IMPORT_PATH="$qml_root"
@@ -61,7 +64,7 @@ export EGL_PLATFORM=surfaceless
 
 # PRoot has no kernel DRM render node. Upstream Anland's supported PRoot path
 # is surfaceless EGL + KGSL; do not lie to KWin by passing /dev/kgsl-3d0 as a
-# DRM node. The compositor scene and Wayland/Xwayland clients still render on
+# DRM node. The compositor scene and Wayland clients can still render on
 # Adreno through Mesa's KGSL Freedreno/Turnip stack.
 if [[ ! -r /dev/kgsl-3d0 ]]; then
     echo "KGSL render device /dev/kgsl-3d0 is unavailable; refusing CPU rendering" >&2

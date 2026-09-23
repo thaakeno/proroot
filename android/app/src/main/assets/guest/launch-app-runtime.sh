@@ -6,6 +6,34 @@ shift
 executable="${1:?application executable required}"
 shift
 
+# Desktop Exec may begin with `env NAME=value` or `env -u NAME`. Keep that
+# environment when placing the family policy before the actual program.
+original_env=()
+if [[ "$executable" == env || "$executable" == /usr/bin/env ]]; then
+    while (($#)); do
+        case "$1" in
+            --) shift; break ;;
+            -u|--unset)
+                (($# >= 2)) || { echo "env unset argument missing" >&2; exit 64; }
+                original_env+=("$1" "$2")
+                shift 2
+                ;;
+            -u*|--unset=*|*=*) original_env+=("$1"); shift ;;
+            *) break ;;
+        esac
+    done
+    executable="${1:?application executable required after env}"
+    shift
+fi
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+runtime_log="$runtime_dir/proroot-app-runtime.log"
+mkdir -p "$runtime_dir" >/dev/null 2>&1 || true
+log_runtime() {
+    printf '%s family=%s executable=%s %s\n' "$(date -Is)" "$family" "$executable" "$*" >>"$runtime_log" 2>/dev/null || true
+}
+log_runtime "invoked"
+
 if [[ -r /usr/local/lib/proroot/session-env.sh ]]; then
     # shellcheck disable=SC1091
     . /usr/local/lib/proroot/session-env.sh
@@ -17,14 +45,6 @@ export MESA_LOADER_DRIVER_OVERRIDE=kgsl
 export TURNIP_KMD=kgsl
 export GALLIUM_DRIVER=freedreno
 export FD_FORCE_KGSL=1
-
-runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-runtime_log="$runtime_dir/proroot-app-runtime.log"
-mkdir -p "$runtime_dir" >/dev/null 2>&1 || true
-
-log_runtime() {
-    printf '%s family=%s executable=%s %s\n' "$(date -Is)" "$family" "$executable" "$*" >>"$runtime_log" 2>/dev/null || true
-}
 
 namespace_signature() {
     printf '%s|%s|%s\n' \
@@ -47,13 +67,20 @@ namespace_sandbox_available() {
 
 case "$family" in
     chromium|electron)
-        if [[ -z "${DISPLAY:-}" ]]; then
-            echo "No KWin Xwayland display is available" >&2
+        if [[ -n "${DISPLAY:-}" ]] && [[ -S "/tmp/.X11-unix/X${DISPLAY#:}" ]]; then
+            ozone_platform=x11
+            export ELECTRON_OZONE_PLATFORM_HINT=x11
+            unset WAYLAND_DISPLAY
+        elif [[ -n "${WAYLAND_DISPLAY:-}" ]] && [[ -S "${XDG_RUNTIME_DIR:?}/$WAYLAND_DISPLAY" ]]; then
+            ozone_platform=wayland
+            export ELECTRON_OZONE_PLATFORM_HINT=wayland
+            unset DISPLAY XAUTHORITY
+        else
+            echo "No live X11 or Wayland display is available" >&2
+            log_runtime "display=unavailable"
             exit 73
         fi
-
-        export ELECTRON_OZONE_PLATFORM_HINT=x11
-        unset WAYLAND_DISPLAY
+        log_runtime "display=$ozone_platform"
 
         sandbox_args=()
         if namespace_sandbox_available; then
@@ -74,9 +101,9 @@ case "$family" in
             log_runtime "sandbox=android-app-boundary kernel-userns=unavailable"
         fi
 
-        exec "$executable" \
+        exec env "${original_env[@]}" "$executable" \
             "${sandbox_args[@]}" \
-            --ozone-platform=x11 \
+            --ozone-platform="$ozone_platform" \
             --use-gl=angle \
             --use-angle=vulkan \
             --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE \
@@ -115,10 +142,10 @@ case "$family" in
             log_runtime "sandbox=android-app-boundary kernel-userns=unavailable"
         fi
 
-        exec "$executable" "$@"
+        exec env "${original_env[@]}" "$executable" "$@"
         ;;
     *)
         log_runtime "sandbox=application-default"
-        exec "$executable" "$@"
+        exec env "${original_env[@]}" "$executable" "$@"
         ;;
 esac

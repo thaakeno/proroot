@@ -3,7 +3,6 @@ package dev.thaakeno.proroot.runtime
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
-import dev.thaakeno.proroot.display.LinuxDisplayRegistry
 import dev.thaakeno.proroot.install.RuntimeInstaller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,9 +22,9 @@ class RuntimeEngine private constructor(private val context: Context) {
             }
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mutex = Mutex()
     private val paths = RuntimePaths(context).also { it.ensureHostDirectories() }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + runtimeFailureHandler(paths))
+    private val mutex = Mutex()
     private val runner = ProrootRunner(context, paths)
     private val installRunner = InstallProotRunner(context, paths)
     private val daemon = AnlandDaemon(context, paths)
@@ -198,14 +197,8 @@ class RuntimeEngine private constructor(private val context: Context) {
                     return@withLock
                 }
 
-                session.stop()
-                systemServices.stop()
-                // Stop the Android consumer while the Anland daemon is still alive.
-                // nativeStop() owns a live display_ctx and must be allowed to close
-                // that transport cleanly before the daemon socket disappears.
-                LinuxDisplayRegistry.stopConsumerAndAwait()
-                daemon.stop()
-                publishStartFailure(failure)
+                val cleanupFailures = shutdownRuntimeComponents(session, systemServices, daemon)
+                publishStartFailure(failure, cleanupFailures)
                 stopForegroundHost()
             }
         }
@@ -240,16 +233,18 @@ class RuntimeEngine private constructor(private val context: Context) {
                                 running = true,
                             ),
                         )
-                        systemServices.stop()
-                        // Keep the daemon alive until the Android consumer has
-                        // disconnected; reversing this order caused nativeStop races.
-                        LinuxDisplayRegistry.stopConsumerAndAwait()
-                        daemon.stop()
+                        val cleanupFailures = shutdownRuntimeComponents(session, systemServices, daemon)
                         RuntimeEvents.publish(
                             RuntimeStatus(
                                 phase = RuntimePhase.failed,
                                 message = "Linux desktop stopped",
-                                detail = "Desktop process exited with code $exitCode. See diagnostics for full logs.",
+                                detail = buildString {
+                                    append("Desktop process exited with code $exitCode. See diagnostics for full logs.")
+                                    if (cleanupFailures.isNotEmpty()) {
+                                        append("\nShutdown failures:\n")
+                                        append(cleanupFailures.joinToString("\n\n"))
+                                    }
+                                }.takeLast(16_000),
                                 installed = true,
                                 running = false,
                             ),
@@ -310,7 +305,7 @@ class RuntimeEngine private constructor(private val context: Context) {
         )
     }
 
-    private fun publishStartFailure(primary: Throwable, original: Throwable? = null) {
+    private fun publishStartFailure(primary: Throwable, cleanupFailures: List<String>) {
         val recentLogs = paths.logsDir.listFiles()
             ?.asSequence()
             ?.filter(File::isFile)
@@ -339,10 +334,10 @@ class RuntimeEngine private constructor(private val context: Context) {
                     }
                     appendLine("===== startup exception =====")
                     appendLine(primary.stackTraceToString())
-                    if (original != null && original !== primary) {
+                    if (cleanupFailures.isNotEmpty()) {
                         appendLine()
-                        appendLine("Initial runtime failure:")
-                        append(original.stackTraceToString())
+                        appendLine("Shutdown failures:")
+                        append(cleanupFailures.joinToString("\n\n"))
                     }
                 }.takeLast(16_000),
                 installed = paths.installMarker.isFile,
@@ -365,13 +360,25 @@ class RuntimeEngine private constructor(private val context: Context) {
                 // Keep the Android SurfaceView mounted while Linux closes. KWin
                 // and the daemon release the producer/transport first; only the
                 // final ready status lets Flutter dispose the native view.
-                session.stop()
-                systemServices.stop()
-                // Stop the Android consumer while the Anland daemon is still alive.
-                // nativeStop() owns a live display_ctx and must be allowed to close
-                // that transport cleanly before the daemon socket disappears.
-                LinuxDisplayRegistry.stopConsumerAndAwait()
-                daemon.stop()
+                val failures = shutdownRuntimeComponents(session, systemServices, daemon)
+
+                if (failures.isNotEmpty()) {
+                    val detail = failures.joinToString("\n\n").takeLast(16_000)
+                    runCatching {
+                        File(paths.logsDir, "android-runtime-failure.log").appendText(detail + "\n")
+                    }
+                    RuntimeEvents.publish(
+                        RuntimeStatus(
+                            phase = RuntimePhase.failed,
+                            message = "Linux shutdown failed",
+                            detail = detail,
+                            installed = paths.installMarker.isFile,
+                            running = session.isRunning(),
+                        ),
+                    )
+                    if (!session.isRunning()) stopForegroundHost()
+                    return@withLock
+                }
 
                 RuntimeEvents.publish(
                     RuntimeStatus(
@@ -405,13 +412,17 @@ class RuntimeEngine private constructor(private val context: Context) {
                         running = true,
                     ),
                 )
-                session.stop()
-                systemServices.stop()
-                // Stop the Android consumer while the Anland daemon is still alive.
-                // nativeStop() owns a live display_ctx and must be allowed to close
-                // that transport cleanly before the daemon socket disappears.
-                LinuxDisplayRegistry.stopConsumerAndAwait()
-                daemon.stop()
+                val failures = shutdownRuntimeComponents(session, systemServices, daemon)
+                if (failures.isNotEmpty()) {
+                    RuntimeEvents.publish(RuntimeStatus(
+                        phase = RuntimePhase.failed,
+                        message = "Linux shutdown failed; reset was cancelled",
+                        detail = failures.joinToString("\n\n").takeLast(16_000),
+                        installed = paths.installMarker.isFile,
+                        running = session.isRunning(),
+                    ))
+                    return@withLock
+                }
                 paths.rootfs.deleteRecursively()
                 paths.rootfsStaging.deleteRecursively()
                 paths.rootfsPrevious.deleteRecursively()

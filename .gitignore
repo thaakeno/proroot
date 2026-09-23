@@ -11,3 +11,4 @@ android/key.properties
 .vscode/
 *.iml
 *.log
+__pycache__/

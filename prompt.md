@@ -1,0 +1,3 @@
+# ProRoot PC engineering objective
+
+Stabilize the embedded ProRoot Debian/KDE desktop on the target Android phone. Fix shared runtime causes of black display, native shutdown crashes, Plasma restarts, browser/Electron launch failures, and GPU rendering gaps. Preserve ProRoot v1.2.8 binary hashes, Anland direct display, and direct KGSL/Freedreno/Turnip. Do not add per-application patches, silent software fallbacks, VNC, or an external display app. Leave the visual UI unchanged. Research upstream code and reports in multiple languages. Do not build an APK until the source-level fixes are complete. Do not claim phone behavior without phone evidence. Start now; use `plans.md` before broad edits.

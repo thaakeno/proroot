@@ -74,7 +74,6 @@ wireplumber_pid=""
 pulse_pid=""
 session_pid=""
 launcher_pid=""
-shell_supervisor_pid=""
 
 cleanup_audio() {
     stop_pid "$pulse_pid"
@@ -84,7 +83,6 @@ cleanup_audio() {
 }
 
 cleanup_session() {
-    stop_pid "$shell_supervisor_pid"
     stop_pid "$launcher_pid"
     rm -f "$runtime/proroot-app-launcher.sock"
     stop_pid "$session_pid"
@@ -122,15 +120,16 @@ export PULSE_RUNTIME_PATH="$pulse_dir"
 export PULSE_SERVER="unix:$pulse_dir/native"
 
 # Keep the session itself toolkit-neutral. Runtime-family launch policy is
-# applied by launch-app-runtime.sh so Chromium/Electron can use accelerated
-# Xwayland while native GTK/Qt/Mozilla applications remain on Wayland.
+# applied by launch-app-runtime.sh. Chromium/Electron select a live display
+# at launch time; this session currently runs Wayland without Xwayland.
 unset MOZ_FAKE_NO_SANDBOX
 unset ELECTRON_OZONE_PLATFORM_HINT
 
 # Build capability-based desktop overrides once per session. This makes apps
 # started by Plasma and apps started from Android use the same compatibility
 # path instead of maintaining app-specific launch commands.
-python3 /usr/local/lib/proroot/prepare-app-runtime.py     >"$log_dir/app-runtime-compat.log" 2>&1 || true
+python3 /usr/local/lib/proroot/prepare-app-runtime.py \
+    >"$log_dir/app-runtime-compat.log" 2>&1 || true
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 XDG_MENU_PREFIX=plasma- \
 XDG_CONFIG_DIRS=/etc/xdg \
@@ -193,34 +192,6 @@ plasma_ready() {
     plasmashell_owned
 }
 
-supervise_plasmashell() {
-    local missing_since=0
-    while [[ -n "$session_pid" ]] && kill -0 "$session_pid" >/dev/null 2>&1; do
-        if plasmashell_owned; then
-            missing_since=0
-        else
-            missing_since=$((missing_since + 1))
-            # Ignore short D-Bus churn, but never leave the user staring at a
-            # black wallpaper with surviving application windows. Once the shell
-            # has genuinely disappeared, restart only plasmashell; KWin and all
-            # applications stay untouched.
-            if [[ "$missing_since" -ge 2 ]]; then
-                printf '%s plasmashell disappeared; restarting shell\n' "$(date -Is)" \
-                    >>"$log_dir/plasmashell-supervisor.log"
-                plasmashell --replace \
-                    >>"$log_dir/plasmashell-supervisor.log" 2>&1 &
-                for _ in {1..50}; do
-                    plasmashell_owned && break
-                    sleep 0.1
-                done
-                missing_since=0
-                sleep 2
-            fi
-        fi
-        sleep 1
-    done
-}
-
 wait_for_plasma() {
     local attempts="${1:-250}"
     while [[ "$attempts" -gt 0 ]]; do
@@ -253,9 +224,6 @@ if [[ -z "$wayland_socket" ]]; then
     exit 71
 fi
 export WAYLAND_DISPLAY="${wayland_socket##*/}"
-
-supervise_plasmashell &
-shell_supervisor_pid=$!
 
 # Start desktop media services only after KWin has published Wayland and
 # plasmashell owns its D-Bus name. Starting them earlier can D-Bus-activate the

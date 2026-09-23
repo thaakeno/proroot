@@ -2,7 +2,7 @@ name: Source validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/runtime-pc-hardening]
   pull_request:
   workflow_dispatch:
 
@@ -80,6 +80,7 @@ jobs:
           bash -n android/app/src/main/assets/guest/session-env.sh
           bash -n android/app/src/main/assets/guest/set-desktop-scale.sh
           python3 -m py_compile             android/app/src/main/assets/guest/host_dbus.py             android/app/src/main/assets/guest/host-upower-bridge.py             android/app/src/main/assets/guest/host-login1-bridge.py             android/app/src/main/assets/guest/set-desktop-scale.py             android/app/src/main/assets/guest/prepare-app-runtime.py             android/app/src/main/assets/guest/desktop-launcher-bridge.py
+          python3 -m unittest discover -s tools -p 'test_prepare_app_runtime.py'
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           ET.parse("android/app/src/main/assets/guest/system-bus.conf")

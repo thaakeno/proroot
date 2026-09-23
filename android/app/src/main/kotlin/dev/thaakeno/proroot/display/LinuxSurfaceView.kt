@@ -85,7 +85,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         width: Int,
         height: Int,
     ) {
-        if (runtimeStopping || width <= 0 || height <= 0) return
+        if (runtimeStopping || !LinuxDisplayRegistry.isActive(this) || width <= 0 || height <= 0) return
         surfaceFormat = format
 
         if (!consumerStarted) {
@@ -123,25 +123,38 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         surfaceFormat = 0
     }
 
-    fun prepareForRuntimeStop() {
+    fun prepareForRuntimeStop(): Boolean {
         runtimeStopping = true
         logLifecycle("prepareForRuntimeStop")
         releaseInputState()
-        stopConsumerForRuntime()
+        return stopConsumerForRuntime()
     }
 
-    fun stopConsumerForRuntime() {
-        if (!consumerStarted) return
-        Native.nativeSetAudioKeepalive(false)
+    fun stopConsumerForRuntime(): Boolean {
+        if (!consumerStarted) return true
+        if (!LinuxDisplayRegistry.ownsConsumer(this)) {
+            // A newer platform view has rebound the process-global native consumer.
+            // Disposing this old view must not disconnect the newer surface.
+            consumerStarted = false
+            return true
+        }
         val error = runCatching {
+            Native.nativeSetAudioKeepalive(false)
             Native.nativeStop()
         }.exceptionOrNull()
 
         if (error == null) {
             consumerStarted = false
+            LinuxDisplayRegistry.consumerStopped(this)
         } else {
             logConsumerError("nativeStop failed", error)
         }
+        return error == null
+    }
+
+    fun onConsumerOwnershipLost() {
+        consumerStarted = false
+        lastButtons = 0
     }
 
     fun dispose() {
@@ -161,7 +174,7 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     private fun startConsumerSafely(surface: Surface, width: Int, height: Int) {
-        if (runtimeStopping || !surface.isValid) return
+        if (runtimeStopping || !LinuxDisplayRegistry.isActive(this) || !surface.isValid) return
         val error = runCatching {
             startConsumer(surface, width, height)
         }.exceptionOrNull()
@@ -183,9 +196,11 @@ class LinuxSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.C
         Native.nativeSetAudioKeepalive(true)
         Native.nativeSetMicEnabled(false)
         applyFrameRate(surface, options.refreshRate)
+        LinuxDisplayRegistry.consumerStarting(this)
         Native.nativeStart(surface, callbackBridge)
 
         consumerStarted = true
+        LinuxDisplayRegistry.consumerStarted(this)
         consumerWidth = width
         consumerHeight = height
         pointerX = width / 2f

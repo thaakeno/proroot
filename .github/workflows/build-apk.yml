@@ -1,11 +1,6 @@
 name: Build installable APK
-# rebuild marker: proroot-v128-runtime-stability-menu-ui-v16
 
 on:
-  push:
-    branches: [main, fix/runtime-pc-hardening]
-    paths:
-      - ".github/workflows/build-apk.yml"
   workflow_dispatch:
 
 permissions:
@@ -56,12 +51,14 @@ jobs:
       - name: Build ARM64 debug APK
         run: |
           APP_VERSION="$(awk '/^version:/ { split($2, value, "+"); print value[1]; exit }' pubspec.yaml)"
+          APP_BUILD="$(awk '/^version:/ { split($2, value, "+"); print value[2]; exit }' pubspec.yaml)"
+          test -n "$APP_VERSION" && test -n "$APP_BUILD"
           flutter build apk \
             --debug \
             --target-platform android-arm64 \
-            --build-number "$GITHUB_RUN_NUMBER" \
+            --build-number "$APP_BUILD" \
             --dart-define="APP_VERSION=$APP_VERSION" \
-            --dart-define="APP_BUILD=$GITHUB_RUN_NUMBER" \
+            --dart-define="APP_BUILD=$APP_BUILD" \
             --dart-define="GIT_SHA=$GITHUB_SHA" \
             --dart-define="PROROOT_VERSION=v1.2.8"
 
