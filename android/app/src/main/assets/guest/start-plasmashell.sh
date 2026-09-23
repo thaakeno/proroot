@@ -7,11 +7,21 @@ log="$log_dir/plasma-shell-exits.log"
 
 sample_shell_startup() {
     local shell_pid="$1" sample=0
-    local status_fields available_kb oom_score oom_adj events
+    local status_fields available_kb oom_score oom_adj memory_cgroup memory_root memory_stats
 
-    printf '%s shell pid=%s cgroup=%s\n' \
+    memory_cgroup="$(awk -F: '$2 == "memory" { print $3; exit }' "/proc/$shell_pid/cgroup" 2>/dev/null)"
+    memory_root=""
+    for candidate in /dev/memcg /sys/fs/cgroup/memory; do
+        if [[ -n "$memory_cgroup" && -r "$candidate$memory_cgroup/memory.usage_in_bytes" ]]; then
+            memory_root="$candidate$memory_cgroup"
+            break
+        fi
+    done
+
+    printf '%s shell pid=%s cgroup=%s memoryCgroup=%s\n' \
         "$(date -u +%FT%TZ)" "$shell_pid" \
-        "$(tr '\n' ' ' </proc/"$shell_pid"/cgroup 2>/dev/null || echo unavailable)" >>"$log"
+        "$(tr '\n' ' ' </proc/"$shell_pid"/cgroup 2>/dev/null || echo unavailable)" \
+        "${memory_root:-unavailable}" >>"$log"
 
     # The GPU shell was SIGKILLed nine seconds after launch in build 47.
     # Sample that startup window without repeatedly probing the live guest.
@@ -25,10 +35,16 @@ sample_shell_startup() {
         available_kb="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null)"
         oom_score="$(cat "/proc/$shell_pid/oom_score" 2>/dev/null || echo unavailable)"
         oom_adj="$(cat "/proc/$shell_pid/oom_score_adj" 2>/dev/null || echo unavailable)"
-        events="$(tr '\n' ',' </sys/fs/cgroup/memory.events 2>/dev/null || echo unavailable)"
-        printf '%s shell pid=%s sample=%s %s MemAvailableKiB=%s oomScore=%s oomAdj=%s memoryEvents=%s\n' \
+        memory_stats=unavailable
+        if [[ -n "$memory_root" ]]; then
+            memory_stats="$(for name in usage_in_bytes limit_in_bytes failcnt; do
+                value="$(cat "$memory_root/memory.$name" 2>/dev/null || echo unavailable)"
+                printf '%s=%s,' "$name" "$value"
+            done)"
+        fi
+        printf '%s shell pid=%s sample=%s %s MemAvailableKiB=%s oomScore=%s oomAdj=%s memoryCgroup=%s\n' \
             "$(date -u +%FT%TZ)" "$shell_pid" "$sample" "$status_fields" \
-            "${available_kb:-unavailable}" "$oom_score" "$oom_adj" "$events" >>"$log"
+            "${available_kb:-unavailable}" "$oom_score" "$oom_adj" "$memory_stats" >>"$log"
         sample=$((sample + 1))
         sleep 1
     done
