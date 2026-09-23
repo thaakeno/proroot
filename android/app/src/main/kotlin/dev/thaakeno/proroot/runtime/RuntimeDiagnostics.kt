@@ -38,7 +38,12 @@ class RuntimeDiagnostics(
             ?.associate { file ->
                 file.name to readTail(file, 120_000)
             }
-            ?: emptyMap()
+            ?.toMutableMap() ?: mutableMapOf()
+        File(paths.rootfs, "run/user").listFiles()?.forEach { userDir ->
+            listOf("plasma-display.log", "plasmashell-restart.log").forEach { name ->
+                File(userDir, "anland-logs/$name").takeIf { it.isFile }?.let { logs[name] = readTail(it, 120_000) }
+            }
+        }
         val kwinQtQuickRenderer = when {
             logs["desktop-session.log"]?.contains("forcing Qt Quick to use the software renderer") == true ->
                 "software (KWin no-DRM QPA path)"

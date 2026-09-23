@@ -74,6 +74,7 @@ wireplumber_pid=""
 pulse_pid=""
 session_pid=""
 launcher_pid=""
+monitor_pid=""
 
 cleanup_audio() {
     stop_pid "$pulse_pid"
@@ -83,6 +84,7 @@ cleanup_audio() {
 }
 
 cleanup_session() {
+    stop_pid "$monitor_pid"
     stop_pid "$launcher_pid"
     rm -f "$runtime/proroot-app-launcher.sock"
     stop_pid "$session_pid"
@@ -224,6 +226,12 @@ if [[ -z "$wayland_socket" ]]; then
     exit 71
 fi
 export WAYLAND_DISPLAY="${wayland_socket##*/}"
+
+# Observe the shell after startup, when the Android app intentionally avoids
+# running guest probes against a live desktop. The monitor also recovers a
+# shell that exits while KWin and application windows remain alive.
+/usr/local/lib/proroot/monitor-plasma-display.sh &
+monitor_pid=$!
 
 # Start desktop media services only after KWin has published Wayland and
 # plasmashell owns its D-Bus name. Starting them earlier can D-Bus-activate the

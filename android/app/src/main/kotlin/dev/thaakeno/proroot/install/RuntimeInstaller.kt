@@ -505,6 +505,7 @@ class RuntimeInstaller(
             val executable = name == "kwin_wayland_wrapper" ||
                 name.startsWith("start-") ||
                 name.startsWith("launch-") ||
+                name.startsWith("monitor-") ||
                 name.startsWith("set-") ||
                 name.startsWith("check-") ||
                 name.endsWith("-bridge.py")
